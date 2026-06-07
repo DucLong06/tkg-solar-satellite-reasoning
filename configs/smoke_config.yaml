@@ -1,0 +1,25 @@
+# Fast end-to-end wiring check (CPU, seconds). NOT a real training run.
+seed: 42
+device: cpu
+model: full            # exercises the full M1->M10 path; use "lstm" for baseline only
+
+lr: 0.001
+batch_size: 16
+epochs: 3
+early_stop_patience: 5
+
+embed_dim: 128         # locked by the shape contract
+n_heads: 4
+dropout: 0.2
+
+k: 12
+img_size: 64           # resnet18 path; set 224 for vit_base
+min_steps: 200
+n_graph_nodes: 8
+
+sat_backbone: resnet18
+pretrained_backbone: false   # offline-friendly for the smoke run
+freeze_backbone: false
+
+use_advanced_loss: false
+mape_min_value: 0.001

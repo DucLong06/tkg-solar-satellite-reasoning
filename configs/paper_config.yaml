@@ -1,0 +1,31 @@
+# Paper reproduction config (Table 5 hyperparameters). GPU strongly recommended.
+# Train on Colab / an SSH GPU box; set device: cuda there.
+seed: 42
+device: cpu            # set to "cuda" on a GPU machine
+model: full
+
+lr: 0.0001             # 1e-4
+batch_size: 64
+epochs: 200
+early_stop_patience: 20
+grad_clip: 1.0
+
+embed_dim: 128
+n_heads: 4
+dropout: 0.2
+
+k: 12
+img_size: 224          # ViT input size
+min_steps: 2000
+n_graph_nodes: 8
+
+sat_backbone: vit_base_patch16_224
+pretrained_backbone: true
+freeze_backbone: false
+
+# Advanced loss (M10): off by default; enable only after MSE full-model reproduces ordering.
+use_advanced_loss: false
+lambda_prob: 0.0
+lambda_physics: 0.0
+
+mape_min_value: 0.001
