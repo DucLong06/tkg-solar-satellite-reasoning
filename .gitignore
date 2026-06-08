@@ -34,3 +34,6 @@ plans/
 CLAUDE.md
 pland.md
 Paper/
+
+# Upload bundles (large data tarballs)
+data_upload/
