@@ -46,6 +46,7 @@ def fit(
     config,
     loss_fn=None,
     verbose: bool = True,
+    desc: str | None = None,
 ) -> dict:
     device = config.device
     model.to(device)
@@ -60,14 +61,20 @@ def fit(
     patience = 0
     history = {"train_loss": [], "val_mae": []}
 
+    # Single epoch-level progress bar (postfix shows live train_loss/val_mae).
+    # Avoids nested per-batch bars (glitchy on Colab) and per-epoch print spam
+    # when training many models back-to-back (benchmark).
+    pbar = (
+        tqdm(total=config.epochs, desc=desc or config.model, leave=True)
+        if verbose
+        else None
+    )
+
     for epoch in range(config.epochs):
         model.train()
         running = 0.0
         n = 0
-        iterator = splits.train_loader
-        if verbose:
-            iterator = tqdm(iterator, desc=f"epoch {epoch+1}/{config.epochs}", leave=False)
-        for batch in iterator:
+        for batch in splits.train_loader:
             batch = _to_device(batch, device)
             optimizer.zero_grad()
             pred = model(batch)
@@ -83,8 +90,9 @@ def fit(
         val = evaluate_mae(model, splits.val_loader, splits.scalers, device, config.mape_min_value)
         history["train_loss"].append(train_loss)
         history["val_mae"].append(val["mae"])
-        if verbose:
-            print(f"epoch {epoch+1}: train_loss={train_loss:.5f} val_mae={val['mae']:.5f}")
+        if pbar is not None:
+            pbar.update(1)
+            pbar.set_postfix(train_loss=f"{train_loss:.4f}", val_mae=f"{val['mae']:.4f}")
 
         if val["mae"] < best_val - 1e-6:
             best_val = val["mae"]
@@ -93,9 +101,12 @@ def fit(
         else:
             patience += 1
             if patience >= config.early_stop_patience:
-                if verbose:
-                    print(f"early stop at epoch {epoch+1} (best val_mae={best_val:.5f})")
+                if pbar is not None:
+                    pbar.write(f"early stop at epoch {epoch+1} (best val_mae={best_val:.5f})")
                 break
+
+    if pbar is not None:
+        pbar.close()
 
     history["best_val_mae"] = best_val
     history["best_checkpoint"] = str(best_path)
