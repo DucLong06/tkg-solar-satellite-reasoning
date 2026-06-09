@@ -64,7 +64,7 @@ def main() -> None:
         print(f"{name}: MAE={metrics['overall']['mae']:.4f} "
               f"RMSE={metrics['overall']['rmse']:.4f} MAPE={metrics['overall']['mape']:.2f}%")
 
-    table = build_benchmark(results)
+    table = build_benchmark(results, scalers=splits.scalers)  # also emit normalized [0,1] cols
     ordering = relative_ordering(results)
     report = (
         "# Benchmark vs Paper Table 6\n\n"
