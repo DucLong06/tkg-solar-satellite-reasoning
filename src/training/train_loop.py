@@ -47,19 +47,12 @@ def fit(
     loss_fn=None,
     verbose: bool = True,
     desc: str | None = None,
+    resume: bool = False,
 ) -> dict:
     device = config.device
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     loss_fn = loss_fn or nn.MSELoss()
-
-    ckpt_dir = Path(config.checkpoint_dir)
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    best_path = ckpt_dir / f"best_{config.model}.pt"
-
-    best_val = float("inf")
-    patience = 0
-    history = {"train_loss": [], "val_mae": []}
 
     # Per-batch progress: one transient bar per epoch (leave=False -> it clears
     # after each epoch, so no nesting glitch and no pile-up across epochs), plus
@@ -68,7 +61,38 @@ def fit(
     # hung. verbose=False (benchmark loops) stays fully silent.
     label = desc or config.model
 
-    for epoch in range(config.epochs):
+    # Checkpoints are keyed by label (the model name) so the 5 benchmark models
+    # each get their own files instead of overwriting a single config.model name.
+    ckpt_dir = Path(config.checkpoint_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    best_path = ckpt_dir / f"best_{label}.pt"
+    last_path = ckpt_dir / f"last_{label}.pt"
+
+    best_val = float("inf")
+    patience = 0
+    start_epoch = 0
+    history = {"train_loss": [], "val_mae": []}
+
+    # Resume from the last full-state checkpoint (model + optimizer + bookkeeping)
+    # so an interrupted run (e.g. Colab quota cutoff) continues instead of
+    # restarting from epoch 0. Only active when resume=True; the resume file is
+    # rewritten every epoch below, so it must live on persistent storage (Drive).
+    if resume and last_path.exists():
+        ck = torch.load(last_path, map_location=device, weights_only=False)
+        model.load_state_dict(ck["model_state"])
+        optimizer.load_state_dict(ck["optimizer_state"])
+        for state in optimizer.state.values():  # optimizer tensors -> training device
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.to(device)
+        start_epoch = ck["epoch"] + 1
+        best_val = ck["best_val"]
+        patience = ck["patience"]
+        history = ck["history"]
+        if verbose:
+            tqdm.write(f"{label}: resume from epoch {start_epoch} (best val_mae={best_val:.5f})")
+
+    for epoch in range(start_epoch, config.epochs):
         model.train()
         running = 0.0
         n = 0
@@ -110,8 +134,33 @@ def fit(
                     tqdm.write(f"{label}: early stop at epoch {epoch + 1} (best val_mae={best_val:.5f})")
                 break
 
+        # Rewrite the resume checkpoint after every completed epoch so a mid-run
+        # interruption loses at most the current epoch, not the whole run. done=False
+        # marks it as still-in-progress (a callers' skip/retrain prompt keys on this).
+        if resume:
+            torch.save(
+                {
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "epoch": epoch,
+                    "best_val": best_val,
+                    "patience": patience,
+                    "history": history,
+                    "done": False,
+                },
+                last_path,
+            )
+
     history["best_val_mae"] = best_val
     history["best_checkpoint"] = str(best_path)
     if best_path.exists():
         model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True)["model_state"])
+
+    # Training ran to completion (early-stop or max epochs). Stamp the resume file
+    # done=True so a re-run can offer skip-vs-retrain instead of resuming.
+    if resume and last_path.exists():
+        ck = torch.load(last_path, map_location="cpu", weights_only=False)
+        ck["done"] = True
+        torch.save(ck, last_path)
+
     return history
