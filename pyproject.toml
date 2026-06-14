@@ -18,13 +18,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Real-data acquisition helpers (optional — only needed to pull live Himawari/NSRDB).
+# Real-data acquisition helpers (optional — only needed to pull live Himawari).
 data = [
     "satpy>=0.46",
     "requests>=2.31",
 ]
 dev = [
     "pytest>=7.4",
+]
+# Comparison baselines: ARIMA (statsmodels) + TFT (pytorch-forecasting, follow-up).
+baselines = [
+    "statsmodels>=0.14",
+    "pytorch-forecasting>=1.0",
 ]
 
 # CPU-only torch wheels (no local GPU). Override on a CUDA box by removing this block.

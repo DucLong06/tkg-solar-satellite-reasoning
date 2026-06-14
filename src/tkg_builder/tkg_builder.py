@@ -47,9 +47,9 @@ class TKGBuilder(nn.Module):
         self.register_buffer("geo", geo_weight_matrix(coords), persistent=False)
 
     def forward(self, meteo_seq: torch.Tensor, pv_hist: torch.Tensor):
-        # meteo_seq [B,k,7], pv_hist [B,k,1]
+        # meteo_seq [B,k,N_METEO_FEATURES], pv_hist [B,k,1]
         b, k, _ = meteo_seq.shape
-        x = torch.cat([meteo_seq, pv_hist], dim=-1)          # [B,k,8]
+        x = torch.cat([meteo_seq, pv_hist], dim=-1)          # [B,k,N_METEO+N_PV]
         proj = self.feature_proj(x)                          # [B,k,node_dim]
 
         type_emb = self.entity_type_embedding(self.type_ids)  # [N, node_dim]

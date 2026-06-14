@@ -1,5 +1,5 @@
-# Paper reproduction config (Table 5 hyperparameters). GPU strongly recommended.
-# Train on Colab / an SSH GPU box; set device: cuda there.
+# DKASC Alice Springs reproduction config. GPU strongly recommended.
+# Train on Colab Pro A100 / an SSH GPU box; set device: cuda there.
 seed: 42
 device: cpu            # set to "cuda" on a GPU machine
 model: full
@@ -14,6 +14,16 @@ embed_dim: 128
 n_heads: 4
 dropout: 0.2
 
+# --- data (co-located DKASC + Himawari Alice, 5-min) ---
+# Set dkasc_csv to the downloaded array id (scripts/download_dkasc.py writes it).
+dkasc_csv: data/dkasc/synthetic_array_2020_2022.csv
+himawari_dir: data/himawari_alice
+cadence_min: 5
+night_ghi_thresh: 5.0
+# Fixed-date split: train 2020-01..2021-09, val 2021-10..12, test 2022.
+train_end: "2021-10-01"
+val_end: "2022-01-01"
+
 k: 12
 img_size: 224          # ViT input size
 min_steps: 2000
@@ -22,6 +32,13 @@ n_graph_nodes: 8
 sat_backbone: vit_base_patch16_224
 pretrained_backbone: true
 freeze_backbone: false
+
+# --- GPU utilization (A100); CPU run ignores these and stays fp32 ---
+precision: auto        # -> bf16 on A100/Ampere, fp16 elsewhere, fp32 on CPU
+auto_batch: true       # size batch + grad_accum from detected VRAM
+grad_accum_steps: 1    # overridden by auto_batch on cuda
+channels_last: false   # enable for conv backbones (resnet); ViT gains little
+compile: false         # torch.compile (eager fallback on the dynamic GAT)
 
 # Advanced loss (M10): off by default; enable only after MSE full-model reproduces ordering.
 use_advanced_loss: false

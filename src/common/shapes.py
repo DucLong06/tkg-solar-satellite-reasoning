@@ -17,24 +17,23 @@ EMBED_DIM: int = 128          # output dim of EVERY modality encoder
 FUSION_DIM: int = EMBED_DIM * 3  # concat(F_sat, H_met, H_graph) = 384
 N_HORIZONS: int = 3           # forecast at 10 / 30 / 60 minutes
 
-# Horizon labels in minutes (cadence = 10 min -> steps ahead = 1, 3, 6).
+# Horizon labels in minutes. DKASC cadence = 5 min -> steps ahead = 2, 6, 12.
 HORIZON_MINUTES: tuple[int, int, int] = (10, 30, 60)
-BASE_CADENCE_MIN: int = 10
+BASE_CADENCE_MIN: int = 5
 HORIZON_STEPS: tuple[int, ...] = tuple(h // BASE_CADENCE_MIN for h in HORIZON_MINUTES)
 
 # --- Meteo / PV feature layout ----------------------------------------------
 # Order is fixed and shared by the loader, scaler, and encoders.
+# DKASC Alice Springs co-located meteo: GHI, ambient temp, humidity, wind speed.
+# (The paper drops DNI/DHI/surface-pressure; DKASC standard download has no DNI/DHI.)
 METEO_FEATURES: tuple[str, ...] = (
     "ghi",
-    "dni",
-    "dhi",
     "air_temperature",
     "relative_humidity",
     "wind_speed",
-    "surface_pressure",
 )
-N_METEO_FEATURES: int = len(METEO_FEATURES)  # 7
-N_PV_FEATURES: int = 1                        # historical PV power (target var)
+N_METEO_FEATURES: int = len(METEO_FEATURES)  # 4
+N_PV_FEATURES: int = 1                        # historical PV power (target var, kW)
 
 # --- Satellite tensor layout -------------------------------------------------
 # Visible band (B03) -> single channel by default; resize handled in the data pipeline.

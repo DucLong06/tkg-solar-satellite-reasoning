@@ -1,18 +1,20 @@
-"""M1 pipeline tests: shapes, no-NaN, no-leakage, chronological split, overlap gate."""
+"""Pipeline tests: shapes, no-NaN, no-leakage, chronological split, overlap gate."""
 
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
 from src.common.shapes import (
+    METEO_FEATURES,
     N_HORIZONS,
     N_METEO_FEATURES,
     SAT_CHANNELS,
 )
-from src.data_pipeline.splits import chronological_bounds
-from src.data_pipeline.time_alignment import EmptyOverlapError, build_common_grid
+from src.data_pipeline.splits import bounds_from_dates, chronological_bounds
+from src.data_pipeline.time_alignment import EmptyOverlapError, align_colocated
 
 
 def test_batch_shapes_and_no_nan(pipeline_splits):
@@ -52,17 +54,25 @@ def test_scaler_fit_on_train_only(pipeline_splits):
 
 
 def test_overlap_gate_fails_loud():
-    import pandas as pd
-
-    # Two disjoint date ranges -> must raise EmptyOverlapError.
-    t1 = pd.date_range("2016-01-01", periods=50, freq="10min", tz="UTC")
-    t2 = pd.date_range("2017-01-01", periods=50, freq="10min", tz="UTC")
+    # Two disjoint date ranges -> empty co-located join must raise EmptyOverlapError.
+    t1 = pd.date_range("2020-01-01", periods=50, freq="5min", tz="UTC")
+    t2 = pd.date_range("2021-01-01", periods=50, freq="5min", tz="UTC")
     pv = pd.Series(np.ones(50, dtype="float32"), index=t1, name="pv")
     meteo = pd.DataFrame(
-        np.ones((50, N_METEO_FEATURES), dtype="float32"),
+        np.full((50, N_METEO_FEATURES), 500.0, dtype="float32"),  # GHI=500 -> daytime
         index=t2,
-        columns=list(range(N_METEO_FEATURES)),
+        columns=list(METEO_FEATURES),
     )
     frames = np.ones((50, SAT_CHANNELS, 8, 8), dtype="float32")
     with pytest.raises(EmptyOverlapError):
-        build_common_grid(pv, meteo, frames, t1, min_steps=10)
+        align_colocated(pv, meteo, frames, t1, min_steps=10)
+
+
+def test_split_by_dates():
+    ts = pd.date_range("2020-01-01", periods=1000, freq="5min", tz="UTC")
+    # train_end at index where ts < boundary; pick boundaries inside the range.
+    train_end = ts[400].strftime("%Y-%m-%dT%H:%M:%SZ")
+    val_end = ts[700].strftime("%Y-%m-%dT%H:%M:%SZ")
+    b = bounds_from_dates(ts, train_end, val_end)
+    assert b.train_end == 400 and b.val_end == 700 and b.total == 1000
+    assert b.train.stop == b.val.start and b.val.stop == b.test.start

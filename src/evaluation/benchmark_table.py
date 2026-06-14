@@ -5,11 +5,11 @@ numbers is NOT expected on the faithful-to-paper mismatched data. The useful
 signal is RELATIVE ordering among our own models, not the gap to paper absolutes.
 
 Scale note: the paper reports MAE/RMSE on Min-Max **normalized** PV in [0,1], while
-our pipeline computes them in **original units (MW)** via inverse-transform. The two
+our pipeline computes them in **original units (kW)** via inverse-transform. The two
 are therefore NOT directly comparable. Pass the PV scaler (or its range) to
 ``build_benchmark`` to also emit normalized columns:
 
-    MAE_norm = MAE_MW / (pv_max - pv_min)   # exact: Min-Max scaling is linear
+    MAE_norm = MAE_kW / (pv_max - pv_min)   # exact: Min-Max scaling is linear
 
 MAPE% is scale-invariant and already comparable to the paper as-is.
 """
@@ -67,7 +67,7 @@ def build_benchmark(results: dict[str, dict], scalers=None) -> str:
 
     # Normalized table: MAE/RMSE divided by the PV range -> directly comparable to paper.
     lines = [
-        "| Model | MAE [0,1] | MAE (paper) | RMSE [0,1] | RMSE (paper) | MAPE% | MAPE% (paper) | MAE (MW) | RMSE (MW) |",
+        "| Model | MAE [0,1] | MAE (paper) | RMSE [0,1] | RMSE (paper) | MAPE% | MAPE% (paper) | MAE (kW) | RMSE (kW) |",
         "|-------|-----------|-------------|------------|--------------|-------|---------------|----------|-----------|",
     ]
     for name, m in results.items():
@@ -88,3 +88,23 @@ def relative_ordering(results: dict[str, dict]) -> list[str]:
     Scale-independent: dividing every MAE by the same PV range preserves order.
     """
     return sorted(results, key=lambda k: results[k]["mae"])
+
+
+def build_ablation_table(results: dict[str, dict], baseline: str = "Full") -> str:
+    """Ablation arms -> markdown table of MAE/RMSE/MAPE (kW) + Δ MAE vs the full model.
+
+    ``results``: {arm_name: overall_metrics (mae/rmse/mape)}. The ``baseline`` arm
+    (default "Full") is the reference for the Δ column; a positive Δ means the arm
+    is worse than full (i.e. the removed component helped).
+    """
+    ref = results.get(baseline, {}).get("mae")
+    lines = [
+        "| Ablation arm | MAE (kW) | RMSE (kW) | MAPE% | Δ MAE vs Full |",
+        "|--------------|----------|-----------|-------|---------------|",
+    ]
+    for name, m in results.items():
+        delta = "-" if ref is None or name == baseline else f"{m['mae'] - ref:+.3f}"
+        lines.append(
+            f"| {name} | {m['mae']:.3f} | {m['rmse']:.3f} | {m['mape']:.2f} | {delta} |"
+        )
+    return "\n".join(lines)

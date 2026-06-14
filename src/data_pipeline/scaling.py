@@ -1,7 +1,7 @@
 """Min-Max scaling fit on TRAIN ONLY (no leakage), with PV inverse-transform.
 
 Two separate scalers so PV inverse-transform at eval is unambiguous:
-  - ``meteo_scaler``: per-column MinMax over the 7 meteo features
+  - ``meteo_scaler``: per-column MinMax over the meteo features (see METEO_FEATURES)
   - ``pv_scaler``   : single-column MinMax over PV power (used to inverse metrics)
 Satellite frames are assumed near-[0,1] (visible reflectance); a train-fit
 scalar min/max keeps them bounded without per-pixel scalers.

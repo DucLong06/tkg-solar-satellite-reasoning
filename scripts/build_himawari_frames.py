@@ -2,9 +2,9 @@
 
 Completes the acquisition the repo's download_himawari.py left as a TODO: for each
 UTC timestep it downloads the B03 visible segment (R20 = 2 km, ~22 MB), decompresses,
-reads with satpy (reader='ahi_hsd'), crops to the Vietnam ROI, resamples to a fixed
-HxW lat/lon grid, and stacks into data/himawari/frames.h5 with the layout the M1
-satellite loader expects (frames [T,1,H,W] float32 + byte-string timestamps).
+reads with satpy (reader='ahi_hsd'), crops to the chosen ROI, resamples to a fixed
+HxW lat/lon grid, and stacks into an output frames.h5 with the layout the satellite
+loader expects (frames [T,1,H,W] float32 + byte-string timestamps).
 
 PARALLEL: a process pool runs the heavy per-frame work (download + bz2 decompress +
 satpy resample) concurrently across CPU cores; the parent process is the sole h5
@@ -15,11 +15,26 @@ RESUMABLE: frames stream into the output h5 (resizable datasets, flushed every
 checkpoint) and any timestamp already present is skipped on restart, so a multi-hour
 full-year pull can be killed and re-launched without losing progress.
 
-Run (full daytime 2016, ~21.9k frames, ~480 GB transient download, 8 workers):
-    python scripts/build_himawari_frames.py --start 2016-01-01 --end 2016-12-31 --workers 8
+REGIONS
+-------
+Two built-in regions (select with --region):
+  vietnam  BBox (102,8,110,24) daytime UTC 0-9   output data/himawari/frames.h5
+  alice    BBox (131.9,-25.8,135.9,-21.8) daytime UTC 22-23,0-8 (UTC+9:30)
+           output data/himawari_alice/frames.h5
 
-Run (default smoke = 2016-06-01..06-07, daytime UTC 00..09):
+Custom region:
+  --bbox lon_min lat_min lon_max lat_max --hours 0,1,2 --out data/custom/frames.h5
+
+Run (Vietnam smoke, same as before):
     python scripts/build_himawari_frames.py --start 2016-06-01 --end 2016-06-07
+
+Run (Alice Springs smoke, 2020):
+    python scripts/build_himawari_frames.py --region alice \
+        --start 2020-06-01 --end 2020-06-07
+
+Run (Alice Springs full 2020-2022, 8 workers):
+    python scripts/build_himawari_frames.py --region alice \
+        --start 2020-01-01 --end 2022-12-31 --workers 8
 """
 
 from __future__ import annotations
@@ -48,7 +63,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 BUCKET = "noaa-himawari8"
 PREFIX = "AHI-L1b-FLDK"
-VN_BBOX = (102.0, 8.0, 110.0, 24.0)  # lon_min, lat_min, lon_max, lat_max
+
+# Built-in region bounding boxes: (lon_min, lat_min, lon_max, lat_max).
+VN_BBOX = (102.0, 8.0, 110.0, 24.0)
+ALICE_BBOX = (131.9, -25.8, 135.9, -21.8)  # ±2° crop around Alice Springs 133.87/−23.76
+
+# Alice Springs is UTC+9:30 → civil daytime ~06:30–19:30 local → UTC 21:00–10:00.
+# Use UTC 22–23 (wrap-around midnight) + 0–8 to cover solar-active hours.
+ALICE_HOURS = [22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8]
+
+# Per-region defaults (bbox, daytime UTC hours, default output path).
+REGION_DEFAULTS: dict[str, dict] = {
+    "vietnam": {
+        "bbox": VN_BBOX,
+        "hours": list(range(0, 10)),  # UTC 0-9
+        "out": "data/himawari/frames.h5",
+        "area_id": "vn",
+        "description": "Vietnam ROI",
+    },
+    "alice": {
+        "bbox": ALICE_BBOX,
+        "hours": ALICE_HOURS,
+        "out": "data/himawari_alice/frames.h5",
+        "area_id": "alice",
+        "description": "Alice Springs ROI",
+    },
+}
+
 CHECKPOINT_EVERY = 25  # flush h5 to disk every N new frames
 
 # Per-worker globals (initialised once per process to avoid re-creating clients).
@@ -73,13 +114,14 @@ def seg_key(day: datetime, hour: int, minute: int = 0) -> str:
     return f"{PREFIX}/{s}/{name}"
 
 
-def make_area(h: int, w: int):
+def make_area(h: int, w: int, bbox: tuple[float, float, float, float], area_id: str = "roi"):
+    """Build a pyresample AreaDefinition for the given lon/lat bounding box."""
     from pyresample.geometry import AreaDefinition
 
     return AreaDefinition(
-        "vn", "Vietnam ROI", "vn",
+        area_id, area_id, area_id,
         {"proj": "longlat", "datum": "WGS84"},
-        w, h, VN_BBOX,
+        w, h, bbox,
     )
 
 
@@ -95,7 +137,12 @@ def frame_from_dat(dat: Path, area) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # Worker side: download + decompress + resample one timestep.
 # --------------------------------------------------------------------------- #
-def _worker_init(size: int, raw_dir: str) -> None:
+def _worker_init(
+    size: int,
+    raw_dir: str,
+    bbox: tuple[float, float, float, float],
+    area_id: str,
+) -> None:
     global _S3, _AREA, _RAW
     import boto3
     import dask
@@ -107,7 +154,7 @@ def _worker_init(size: int, raw_dir: str) -> None:
         "s3",
         config=Config(signature_version=UNSIGNED, retries={"max_attempts": 5, "mode": "standard"}),
     )
-    _AREA = make_area(size, size)
+    _AREA = make_area(size, size, bbox, area_id)
     _RAW = Path(raw_dir)
     _RAW.mkdir(parents=True, exist_ok=True)
 
@@ -187,21 +234,64 @@ def build_tasks(start, end, hours, step_min, done):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--start", default="2016-06-01")
-    ap.add_argument("--end", default="2016-06-07")
-    ap.add_argument("--hours", default="0,1,2,3,4,5,6,7,8,9", help="UTC hours (VN daytime)")
-    ap.add_argument("--step-min", type=int, default=10, help="intra-hour cadence (min)")
-    ap.add_argument("--size", type=int, default=64)
-    ap.add_argument("--workers", type=int, default=8, help="parallel download/resample workers")
-    ap.add_argument("--out", type=Path, default=Path("data/himawari/frames.h5"))
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    # Region selection: named shortcut OR fully custom bbox + hours.
+    region_group = ap.add_mutually_exclusive_group()
+    region_group.add_argument(
+        "--region", choices=list(REGION_DEFAULTS), default=None,
+        help="Named ROI preset (vietnam|alice). Implies default bbox, hours, and --out.",
+    )
+    region_group.add_argument(
+        "--bbox", nargs=4, type=float, metavar=("LON_MIN", "LAT_MIN", "LON_MAX", "LAT_MAX"),
+        help="Custom bounding box. Requires --hours and --out.",
+    )
+
+    ap.add_argument(
+        "--hours",
+        help=(
+            "Comma-separated UTC hours to download (e.g. 22,23,0,1,2,3,4,5,6,7,8). "
+            "Required when --bbox is used. Overrides region default when --region is used."
+        ),
+    )
+    ap.add_argument("--start", default="2016-06-01", help="Start date YYYY-MM-DD.")
+    ap.add_argument("--end", default="2016-06-07", help="End date YYYY-MM-DD.")
+    ap.add_argument("--step-min", type=int, default=10, help="Intra-hour cadence in minutes.")
+    ap.add_argument("--size", type=int, default=64, help="Output grid size (H=W, default 64).")
+    ap.add_argument("--workers", type=int, default=8, help="Parallel download/resample workers.")
+    ap.add_argument("--out", type=Path, default=None, help="Output h5 path (overrides region default).")
     args = ap.parse_args()
 
-    hours = [int(h) for h in args.hours.split(",")]
-    raw = args.out.parent / "raw"
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    # Resolve region / bbox / hours / out.
+    if args.bbox is not None:
+        # Custom bbox path.
+        if args.hours is None:
+            ap.error("--bbox requires --hours (comma-separated UTC hours, e.g. 0,1,2,3)")
+        if args.out is None:
+            ap.error("--bbox requires --out (output h5 path)")
+        bbox = tuple(args.bbox)
+        hours = [int(h) for h in args.hours.split(",")]
+        out_path = args.out
+        area_id = "custom"
+    else:
+        # Named region path (default: vietnam for backward compat).
+        region_name = args.region if args.region is not None else "vietnam"
+        region = REGION_DEFAULTS[region_name]
+        bbox = region["bbox"]
+        hours = [int(h) for h in args.hours.split(",")] if args.hours else region["hours"]
+        out_path = args.out if args.out is not None else Path(region["out"])
+        area_id = region["area_id"]
 
-    store, done = open_store(args.out, args.size)
+    raw = out_path.parent / "raw"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(
+        f"  region bbox={bbox}  hours={hours}  out={out_path}  "
+        f"size={args.size}x{args.size}  workers={args.workers}",
+        flush=True,
+    )
+
+    store, done = open_store(out_path, args.size)
     tasks = build_tasks(args.start, args.end, hours, args.step_min, done)
     print(f"  {len(tasks)} timesteps to fetch with {args.workers} workers", flush=True)
 
@@ -209,7 +299,7 @@ def main() -> None:
     try:
         with ProcessPoolExecutor(
             max_workers=args.workers, initializer=_worker_init,
-            initargs=(args.size, str(raw)),
+            initargs=(args.size, str(raw), bbox, area_id),
         ) as ex:
             futures = [ex.submit(_process_timestep, t) for t in tasks]
             for fut in as_completed(futures):
@@ -233,8 +323,8 @@ def main() -> None:
         store.close()
 
     print(
-        f"DONE {args.out}  total_frames={total}  new={n_new}  missing={n_miss}  "
-        f"({args.out.stat().st_size / 1e6:.1f} MB)"
+        f"DONE {out_path}  total_frames={total}  new={n_new}  missing={n_miss}  "
+        f"({out_path.stat().st_size / 1e6:.1f} MB)"
     )
 
 
