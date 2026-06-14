@@ -7,6 +7,7 @@ the val MAE used for early-stopping is inverse-scaled to original units.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 
 import torch
@@ -20,6 +21,22 @@ from src.metrics.regression_metrics import compute_all
 
 def _to_device(batch: dict, device: str) -> dict:
     return {k: v.to(device) for k, v in batch.items()}
+
+
+def _amp_setup(config):
+    """Resolve (autocast_context_factory, grad_scaler) from config.precision.
+
+    Off CUDA, or precision fp32, this returns a no-op nullcontext + no scaler so
+    the training path is bit-identical to the original fp32 loop. bf16 needs no
+    scaler (full range); fp16 uses a GradScaler.
+    """
+    precision = getattr(config, "precision", "fp32")
+    on_cuda = config.device == "cuda" and torch.cuda.is_available()
+    if not on_cuda or precision not in ("bf16", "fp16"):
+        return (lambda: nullcontext()), None
+    dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+    scaler = torch.cuda.amp.GradScaler() if precision == "fp16" else None
+    return (lambda: torch.autocast(device_type="cuda", dtype=dtype)), scaler
 
 
 @torch.no_grad()
@@ -51,6 +68,19 @@ def fit(
 ) -> dict:
     device = config.device
     model.to(device)
+
+    # GPU utilization knobs (all no-ops off CUDA -> fp32 path unchanged).
+    on_cuda = device == "cuda" and torch.cuda.is_available()
+    if on_cuda and getattr(config, "channels_last", False):
+        model = model.to(memory_format=torch.channels_last)
+    if on_cuda and getattr(config, "compile", False):
+        try:
+            model = torch.compile(model)
+        except Exception as e:  # dynamic per-timestep GAT may not compile -> eager
+            tqdm.write(f"torch.compile failed ({e}); continuing eager")
+    autocast_ctx, scaler = _amp_setup(config)
+    accum = max(1, getattr(config, "grad_accum_steps", 1))
+
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     loss_fn = loss_fn or nn.MSELoss()
 
@@ -97,17 +127,34 @@ def fit(
         running = 0.0
         n = 0
         loader = splits.train_loader
+        n_batches = len(loader)
         if verbose:
             loader = tqdm(loader, desc=f"{label} ep {epoch + 1}/{config.epochs}", leave=False)
-        for batch in loader:
+
+        # Gradient accumulation: step the optimizer every `accum` micro-batches
+        # (accum=1 -> step every batch, identical to the original loop).
+        optimizer.zero_grad(set_to_none=True)
+        for i, batch in enumerate(loader):
             batch = _to_device(batch, device)
-            optimizer.zero_grad()
-            pred = model(batch)
-            loss = loss_fn(pred, batch["target"])
-            loss.backward()
-            if config.grad_clip:
-                nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-            optimizer.step()
+            with autocast_ctx():
+                pred = model(batch)
+                loss = loss_fn(pred, batch["target"])
+            scaled = loss / accum
+            (scaler.scale(scaled) if scaler else scaled).backward()
+
+            is_step = (i + 1) % accum == 0 or (i + 1) == n_batches
+            if is_step:
+                if config.grad_clip:
+                    if scaler:
+                        scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+                if scaler:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
             running += loss.item() * len(batch["target"])
             n += len(batch["target"])
             if verbose:

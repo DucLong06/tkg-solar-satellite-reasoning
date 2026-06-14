@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.generate_synthetic_data import gen_himawari, gen_nsrdb, gen_opsd
+from scripts.generate_synthetic_data import gen_dkasc, gen_himawari_alice
 from src.common.seeding import seed_everything
 
 
@@ -20,10 +20,9 @@ def synthetic_data_dir(tmp_path_factory) -> Path:
     seed_everything(42)
     out = tmp_path_factory.mktemp("data")
     rng = np.random.default_rng(0)
-    days = 14  # enough for 70/15/15 split + windows at 10-min cadence
-    gen_opsd(out, days, rng)
-    gen_nsrdb(out, days, rng)
-    gen_himawari(out, days, rng)
+    days = 14  # enough for 70/15/15 split + windows at 5-min cadence (daytime-only)
+    gen_dkasc(out, days, rng)
+    gen_himawari_alice(out, days, rng)
     return out
 
 
@@ -33,9 +32,8 @@ def pipeline_splits(synthetic_data_dir):
 
     seed_everything(42)
     return DataPipeline.load(
-        str(synthetic_data_dir / "opsd" / "time_series_15min_singleindex.csv"),
-        str(synthetic_data_dir / "nsrdb" / "vietnam_2016.h5"),
-        str(synthetic_data_dir / "himawari"),
+        str(synthetic_data_dir / "dkasc" / "synthetic_array_2020_2022.csv"),
+        str(synthetic_data_dir / "himawari_alice"),
         k=12,
         batch_size=16,
         img_size=64,

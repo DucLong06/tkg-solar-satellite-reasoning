@@ -1,7 +1,10 @@
-"""Raw-source readers: OPSD CSV, NSRDB h5, Himawari h5.
+"""Raw-source readers: DKASC CSV (co-located PV+meteo), Himawari h5.
 
 Each returns data on its native cadence with a UTC DatetimeIndex / timestamp array.
 Time alignment to the common grid happens in ``time_alignment.py``.
+
+The legacy 3-source readers (OPSD/NSRDB) are retained below for reference but are
+no longer wired into the DKASC pipeline (the cross-continent fusion was retired).
 """
 
 from __future__ import annotations
@@ -13,6 +16,49 @@ import numpy as np
 import pandas as pd
 
 from src.common.shapes import METEO_FEATURES
+
+# Canonical DKASC clean-CSV columns produced by scripts/download_dkasc.py.
+# timestamp -> UTC index; Pac -> PV target (kW); the four meteo columns map to
+# METEO_FEATURES in contract order.
+DKASC_METEO_COLUMNS: dict[str, str] = {
+    "GHI": "ghi",
+    "Tamb": "air_temperature",
+    "RH": "relative_humidity",
+    "WS": "wind_speed",
+}
+
+
+def load_dkasc(csv_path: str | Path) -> tuple[pd.Series, pd.DataFrame]:
+    """Read one DKASC Alice Springs array CSV -> (pv [kW] Series, meteo DataFrame).
+
+    Expected clean schema: ``timestamp, Pac, GHI, Tamb, RH, WS`` (5-min cadence,
+    UTC). ``Pac`` is PV active power in kW (the forecast target); the four meteo
+    columns are reordered/renamed to the contract's ``METEO_FEATURES``.
+    """
+    df = pd.read_csv(csv_path)
+    ts_col = "timestamp" if "timestamp" in df.columns else df.columns[0]
+    idx = pd.to_datetime(df[ts_col], utc=True)
+
+    if "Pac" not in df.columns:
+        raise KeyError(f"DKASC CSV missing 'Pac' (PV kW) column; has {list(df.columns)}")
+    missing = [c for c in DKASC_METEO_COLUMNS if c not in df.columns]
+    if missing:
+        raise KeyError(f"DKASC CSV missing meteo columns {missing}; has {list(df.columns)}")
+
+    pv = pd.Series(df["Pac"].to_numpy(dtype="float32"), index=idx, name="pv")
+    pv = pv[~pv.index.duplicated(keep="first")].sort_index()
+
+    meteo = pd.DataFrame(
+        {dst: df[src].to_numpy(dtype="float32") for src, dst in DKASC_METEO_COLUMNS.items()},
+        index=idx,
+    )[list(METEO_FEATURES)]
+    meteo = meteo[~meteo.index.duplicated(keep="first")].sort_index()
+    return pv, meteo
+
+
+def load_himawari_alice(himawari_dir: str | Path) -> tuple[np.ndarray, pd.DatetimeIndex]:
+    """Locate + read the co-located Himawari Alice Springs frames h5."""
+    return load_himawari(find_himawari_file(himawari_dir))
 
 
 def load_opsd(csv_path: str | Path, target_col: str | None = None) -> pd.Series:

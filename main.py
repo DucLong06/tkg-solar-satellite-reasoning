@@ -51,22 +51,29 @@ def main() -> None:
     cfg = Config.from_yaml(args.config) if Path(args.config).exists() else Config()
     seed_everything(cfg.seed)
 
+    # On CUDA, size batch/precision from detected VRAM before loaders are built.
+    from src.training.gpu_autoscale import resolve_runtime
+    resolve_runtime(cfg)
+
     if args.generate_synthetic:
         import numpy as np
-        from scripts.generate_synthetic_data import gen_himawari, gen_nsrdb, gen_opsd
+        from scripts.generate_synthetic_data import gen_dkasc, gen_himawari_alice
 
         rng = np.random.default_rng(cfg.seed)
         out = Path("data")
-        gen_opsd(out, 30, rng); gen_nsrdb(out, 30, rng); gen_himawari(out, 30, rng)
-        print("Synthetic data generated in data/.")
+        gen_dkasc(out, 30, rng); gen_himawari_alice(out, 30, rng)
+        print("Synthetic DKASC data generated in data/.")
 
     splits = DataPipeline.load(
-        cfg.opsd_path, cfg.nsrdb_path, cfg.himawari_dir,
+        cfg.dkasc_csv, cfg.himawari_dir,
         k=cfg.k, batch_size=cfg.batch_size, img_size=cfg.img_size,
-        min_steps=cfg.min_steps, train_frac=cfg.train_frac, val_frac=cfg.val_frac,
+        min_steps=cfg.min_steps,
+        train_end=cfg.train_end, val_end=cfg.val_end,
+        train_frac=cfg.train_frac, val_frac=cfg.val_frac,
+        cadence_min=cfg.cadence_min, night_ghi_thresh=cfg.night_ghi_thresh,
         cache_dir=cfg.cache_dir, num_workers=cfg.num_workers, scaler_out=cfg.scaler_out,
     )
-    print("M1 pipeline:", splits.meta)
+    print("Data pipeline:", splits.meta)
 
     model = build_model(cfg)
     n_params = sum(p.numel() for p in model.parameters())
