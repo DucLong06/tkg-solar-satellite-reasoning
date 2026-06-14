@@ -3,8 +3,8 @@
 Two separate scalers so PV inverse-transform at eval is unambiguous:
   - ``meteo_scaler``: per-column MinMax over the meteo features (see METEO_FEATURES)
   - ``pv_scaler``   : single-column MinMax over PV power (used to inverse metrics)
-Satellite frames are assumed near-[0,1] (visible reflectance); a train-fit
-scalar min/max keeps them bounded without per-pixel scalers.
+Satellite frames are visible-band reflectance in PERCENT (~0-100); a train-fit
+scalar min/max maps them to ~[0,1] without per-pixel scalers.
 
 Note: a chronologically-later test peak can exceed the train max -> scaled value
 > 1. We do NOT clip (clipping would corrupt the target); metrics are computed in

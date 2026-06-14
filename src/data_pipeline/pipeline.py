@@ -28,7 +28,9 @@ from src.data_pipeline.time_alignment import align_colocated
 # Bump when align/clean logic changes so stale caches are invalidated.
 # v3: DKASC co-located source (single CSV + Himawari Alice), 5-min grid, night
 #     filter, timestamps cached for fixed-date splits.
-CACHE_VERSION = "v3"
+# v4: satellite clamp fixed to percent-reflectance range (was [0,1], which killed
+#     the real satellite signal).
+CACHE_VERSION = "v4"
 
 
 @dataclass
