@@ -52,8 +52,16 @@ def apply_clip(arr: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     return clipped.reshape(arr.shape) if arr.ndim > 1 else clipped[:, 0]
 
 
+# satpy's AHI B03 'reflectance' is in PERCENT (~0-100, slightly higher over bright
+# cloud), NOT [0,1]. Clamp to a physical reflectance range; the MinMax sat scaler
+# (fit on train) maps it to [0,1] downstream. Clamping to [0,1] here would flatten
+# every real frame to 1.0 and kill the satellite signal (synthetic frames happen to
+# already lie in [0,1], which masked this).
+SAT_REFLECTANCE_MAX = 120.0
+
+
 def clean_arrays(data: dict) -> dict:
-    """NaN fill on pv/meteo + satellite clamp to [0,1].
+    """NaN fill on pv/meteo + satellite clamp to a valid reflectance range.
 
     Outlier clipping is deliberately NOT done here: it requires train-only stats,
     so it is applied later in the pipeline AFTER the chronological split (see
@@ -64,5 +72,5 @@ def clean_arrays(data: dict) -> dict:
     data["pv"] = fill_residual_nans(data["pv"])
     data["meteo"] = fill_residual_nans(data["meteo"])
     sat = np.nan_to_num(data["sat"], nan=0.0)
-    data["sat"] = np.clip(sat, 0.0, 1.0).astype("float32")
+    data["sat"] = np.clip(sat, 0.0, SAT_REFLECTANCE_MAX).astype("float32")
     return data

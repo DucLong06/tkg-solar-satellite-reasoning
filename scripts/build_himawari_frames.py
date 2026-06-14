@@ -1,7 +1,8 @@
 """Build real Himawari-8 frames.h5 from the NOAA AWS open bucket.
 
 Completes the acquisition the repo's download_himawari.py left as a TODO: for each
-UTC timestep it downloads the B03 visible segment (R20 = 2 km, ~22 MB), decompresses,
+UTC timestep it downloads the B03 visible segment (era-dependent: R05 0.5 km ~17 MB
+for 2020+, R20 2 km legacy), decompresses,
 reads with satpy (reader='ahi_hsd'), crops to the chosen ROI, resamples to a fixed
 HxW lat/lon grid, and stacks into an output frames.h5 with the layout the satellite
 loader expects (frames [T,1,H,W] float32 + byte-string timestamps).
@@ -73,12 +74,19 @@ ALICE_BBOX = (131.9, -25.8, 135.9, -21.8)  # ±2° crop around Alice Springs 133
 ALICE_HOURS = [22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8]
 
 # Per-region defaults (bbox, daytime UTC hours, default output path).
+# B03 segment/resolution differ by AHI archive era:
+#   - 2016 Vietnam build used the 2 km full-disk product (R20, single segment S0101).
+#   - 2020-2022 B03 on AWS is the native 0.5 km product (R05) split into 10 FLDK
+#     latitude segments S0110..S1010. Alice Springs (-23.76 lat) falls entirely in
+#     segment 8 (S0810) — verified by cropping the bbox to a 100%-finite frame.
 REGION_DEFAULTS: dict[str, dict] = {
     "vietnam": {
         "bbox": VN_BBOX,
         "hours": list(range(0, 10)),  # UTC 0-9
         "out": "data/himawari/frames.h5",
         "area_id": "vn",
+        "resolution": "R20",
+        "segment": "S0101",
         "description": "Vietnam ROI",
     },
     "alice": {
@@ -86,6 +94,8 @@ REGION_DEFAULTS: dict[str, dict] = {
         "hours": ALICE_HOURS,
         "out": "data/himawari_alice/frames.h5",
         "area_id": "alice",
+        "resolution": "R05",
+        "segment": "S0810",
         "description": "Alice Springs ROI",
     },
 }
@@ -107,10 +117,27 @@ def daterange(start: str, end: str):
         d += timedelta(days=1)
 
 
-def seg_key(day: datetime, hour: int, minute: int = 0) -> str:
+def segment_for_lat(lat: float, n_segments: int = 10) -> str:
+    """FLDK B03 R05 segment id (S0NN10) whose latitude band contains ``lat``.
+
+    AHI full-disk is split top->bottom (north->south) into ``n_segments`` equal
+    line strips. Project lat (at the sub-satellite longitude) to the geostationary
+    y axis, map to a line, then to a 1-based segment. Used for custom bboxes.
+    """
+    from pyproj import Transformer
+
+    geos = ("+proj=geos +h=35785831 +lon_0=140.7 +a=6378137 +b=6356752.3 +units=m +no_defs")
+    y_top, y_bot = 5500000.0, -5500000.0  # full-disk y extent (m)
+    _, y = Transformer.from_crs("EPSG:4326", geos, always_xy=True).transform(140.7, lat)
+    frac = (y_top - y) / (y_top - y_bot)
+    seg = min(n_segments, max(1, int(frac * n_segments) + 1))
+    return f"S{seg:02d}{n_segments:02d}"
+
+
+def seg_key(day: datetime, hour: int, minute: int, resolution: str, segment: str) -> str:
     hm = f"{hour:02d}{minute:02d}"
     s = f"{day:%Y/%m/%d}/{hm}"
-    name = f"HS_H08_{day:%Y%m%d}_{hm}_B03_FLDK_R20_S0101.DAT.bz2"
+    name = f"HS_H08_{day:%Y%m%d}_{hm}_B03_FLDK_{resolution}_{segment}.DAT.bz2"
     return f"{PREFIX}/{s}/{name}"
 
 
@@ -219,7 +246,7 @@ def append_frame(f, arr: np.ndarray, stamp: str) -> None:
     f["timestamps"][n] = stamp.encode()
 
 
-def build_tasks(start, end, hours, step_min, done):
+def build_tasks(start, end, hours, step_min, done, resolution, segment):
     """All (stamp, key) timesteps in range not already stored."""
     minutes = list(range(0, 60, step_min))
     tasks = []
@@ -229,7 +256,7 @@ def build_tasks(start, end, hours, step_min, done):
                 stamp = f"{day:%Y-%m-%d}T{hour:02d}:{minute:02d}:00Z"
                 if stamp in done:
                     continue
-                tasks.append((stamp, seg_key(day, hour, minute)))
+                tasks.append((stamp, seg_key(day, hour, minute, resolution, segment)))
     return tasks
 
 
@@ -260,9 +287,15 @@ def main() -> None:
     ap.add_argument("--size", type=int, default=64, help="Output grid size (H=W, default 64).")
     ap.add_argument("--workers", type=int, default=8, help="Parallel download/resample workers.")
     ap.add_argument("--out", type=Path, default=None, help="Output h5 path (overrides region default).")
+    ap.add_argument("--resolution", default=None,
+                    help="B03 resolution tag (R05=0.5km native 2020+, R20=2km legacy). "
+                         "Defaults: region preset, or R05 for custom --bbox.")
+    ap.add_argument("--segment", default=None,
+                    help="FLDK segment tag (e.g. S0810). Defaults: region preset, or "
+                         "auto-computed from the custom bbox centre latitude.")
     args = ap.parse_args()
 
-    # Resolve region / bbox / hours / out.
+    # Resolve region / bbox / hours / out / resolution / segment.
     if args.bbox is not None:
         # Custom bbox path.
         if args.hours is None:
@@ -273,6 +306,8 @@ def main() -> None:
         hours = [int(h) for h in args.hours.split(",")]
         out_path = args.out
         area_id = "custom"
+        resolution = args.resolution or "R05"
+        segment = args.segment or segment_for_lat((bbox[1] + bbox[3]) / 2.0)
     else:
         # Named region path (default: vietnam for backward compat).
         region_name = args.region if args.region is not None else "vietnam"
@@ -281,18 +316,21 @@ def main() -> None:
         hours = [int(h) for h in args.hours.split(",")] if args.hours else region["hours"]
         out_path = args.out if args.out is not None else Path(region["out"])
         area_id = region["area_id"]
+        resolution = args.resolution or region["resolution"]
+        segment = args.segment or region["segment"]
 
     raw = out_path.parent / "raw"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(
         f"  region bbox={bbox}  hours={hours}  out={out_path}  "
-        f"size={args.size}x{args.size}  workers={args.workers}",
+        f"size={args.size}x{args.size}  workers={args.workers}  "
+        f"B03 {resolution}/{segment}",
         flush=True,
     )
 
     store, done = open_store(out_path, args.size)
-    tasks = build_tasks(args.start, args.end, hours, args.step_min, done)
+    tasks = build_tasks(args.start, args.end, hours, args.step_min, done, resolution, segment)
     print(f"  {len(tasks)} timesteps to fetch with {args.workers} workers", flush=True)
 
     n_new = n_miss = 0
