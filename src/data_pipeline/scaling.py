@@ -54,13 +54,13 @@ class Scalers:
             return pickle.load(fh)
 
 
-def fit_scalers(meteo_train: np.ndarray, pv_train: np.ndarray, sat_train: np.ndarray) -> Scalers:
-    """Fit all scalers on the TRAIN split only."""
+def fit_scalers(meteo_train: np.ndarray, pv_train: np.ndarray, sat_train: np.ndarray | None) -> Scalers:
+    """Fit all scalers on the TRAIN split only. ``sat_train=None`` -> identity sat scaler."""
     meteo_scaler = MinMaxScaler().fit(meteo_train)
     pv_scaler = MinMaxScaler().fit(pv_train.reshape(-1, 1))
     return Scalers(
         meteo_scaler=meteo_scaler,
         pv_scaler=pv_scaler,
-        sat_min=float(sat_train.min()),
-        sat_max=float(sat_train.max()),
+        sat_min=float(sat_train.min()) if sat_train is not None else 0.0,
+        sat_max=float(sat_train.max()) if sat_train is not None else 1.0,
     )

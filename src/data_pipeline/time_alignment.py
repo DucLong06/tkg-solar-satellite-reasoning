@@ -34,8 +34,8 @@ def _resize_frames(frames: np.ndarray, size: int) -> np.ndarray:
 def align_colocated(
     pv: pd.Series,
     meteo: pd.DataFrame,
-    sat_frames: np.ndarray,
-    sat_ts: pd.DatetimeIndex,
+    sat_frames: np.ndarray | None = None,
+    sat_ts: pd.DatetimeIndex | None = None,
     *,
     cadence_min: int = BASE_CADENCE_MIN,
     min_steps: int = 200,
@@ -43,26 +43,33 @@ def align_colocated(
     night_ghi_thresh: float = 5.0,
     max_interp_gap: int = 3,
 ) -> dict:
-    """Align co-located DKASC + Himawari to the common 5-min grid (daytime only).
+    """Align co-located DKASC (+ optional Himawari) to the 5-min grid (daytime only).
 
     Steps: build a ``cadence_min`` grid over the overlapping span; interpolate PV
-    and meteo onto it (only across gaps < ``max_interp_gap`` samples); pick the
-    nearest satellite frame within one cadence step; keep timestamps where all
-    sources are present AND ``GHI >= night_ghi_thresh`` (daytime); assert
+    and meteo onto it (only across gaps < ``max_interp_gap`` samples); when satellite
+    frames are given, pick the nearest one within one cadence step; keep timestamps
+    where all sources are present AND ``GHI >= night_ghi_thresh`` (daytime); assert
     >= ``min_steps``.
+
+    ``sat_frames=None`` -> satellite-free mode: PV + meteo only over the FULL DKASC
+    span (used to train the baselines without waiting for the Himawari download).
+    Returns ``sat=None`` in that case.
 
     Note: dropping night rows makes the kept array temporally non-contiguous across
     day boundaries; sliding windows therefore span day breaks (documented
     approximation, see docs/assumptions.md).
     """
-    start = max(pv.index.min(), meteo.index.min(), sat_ts.min())
-    end = min(pv.index.max(), meteo.index.max(), sat_ts.max())
+    use_sat = sat_frames is not None
+    mins = [pv.index.min(), meteo.index.min()] + ([sat_ts.min()] if use_sat else [])
+    maxs = [pv.index.max(), meteo.index.max()] + ([sat_ts.max()] if use_sat else [])
+    start, end = max(mins), min(maxs)
     if start >= end:
         raise EmptyOverlapError(
-            "No overlapping date range across DKASC PV/meteo + Himawari.\n"
+            "No overlapping date range across DKASC PV/meteo"
+            + (" + Himawari" if use_sat else "") + ".\n"
             f"  PV   : {pv.index.min()} .. {pv.index.max()}\n"
             f"  meteo: {meteo.index.min()} .. {meteo.index.max()}\n"
-            f"  Himawari: {sat_ts.min()} .. {sat_ts.max()}"
+            + (f"  Himawari: {sat_ts.min()} .. {sat_ts.max()}\n" if use_sat else "")
         )
 
     grid = pd.date_range(start, end, freq=f"{cadence_min}min", tz="UTC")
@@ -77,10 +84,11 @@ def align_colocated(
         .reindex(grid)
     )
 
-    sat_series = pd.Series(range(len(sat_ts)), index=sat_ts)
-    sat_idx = sat_series.reindex(grid, method="nearest", tolerance=pd.Timedelta(minutes=cadence_min))
-
-    present = pv_g.notna() & meteo_g.notna().all(axis=1) & sat_idx.notna()
+    present = pv_g.notna() & meteo_g.notna().all(axis=1)
+    if use_sat:
+        sat_series = pd.Series(range(len(sat_ts)), index=sat_ts)
+        sat_idx = sat_series.reindex(grid, method="nearest", tolerance=pd.Timedelta(minutes=cadence_min))
+        present = present & sat_idx.notna()
     daytime = meteo_g["ghi"] >= night_ghi_thresh  # PV ~0 at night -> drop
     mask = (present & daytime).to_numpy()
     n = int(mask.sum())
@@ -91,13 +99,15 @@ def align_colocated(
             "  Widen the data window, lower min_steps, or check GHI/night threshold."
         )
 
-    sat_sel = sat_idx[mask].to_numpy().astype(int)
-    frames = _resize_frames(sat_frames[sat_sel], img_size)
+    frames = None
+    if use_sat:
+        sat_sel = sat_idx[mask].to_numpy().astype(int)
+        frames = _resize_frames(sat_frames[sat_sel], img_size)
     return {
         "timestamps": grid[mask],
         "pv": pv_g[mask].to_numpy(dtype="float32"),        # [T]
         "meteo": meteo_g[mask].to_numpy(dtype="float32"),  # [T, n_feat]
-        "sat": frames,                                     # [T, C, H, W]
+        "sat": frames,                                     # [T, C, H, W] or None
     }
 
 

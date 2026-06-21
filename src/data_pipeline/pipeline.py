@@ -56,18 +56,23 @@ def _cache_key(
 
 def _load_aligned(
     dkasc_csv, himawari_dir, img_size, min_steps, cadence_min, night_ghi_thresh,
-    cache_dir, use_cache,
+    cache_dir, use_cache, use_satellite,
 ) -> dict:
-    frames, sat_ts = load_himawari_alice(himawari_dir)
-    # Key on the RESOLVED frames file (not the dir) so overwriting frames.h5 busts
-    # the cache; include night_ghi_thresh since it selects which rows survive.
-    him_file = find_himawari_file(himawari_dir)
-    key = _cache_key([Path(dkasc_csv), him_file], img_size, min_steps, cadence_min, night_ghi_thresh)
-    cache_path = Path(cache_dir) / f"aligned_{key}.npz"
+    frames = sat_ts = None
+    key_paths = [Path(dkasc_csv)]
+    if use_satellite:
+        frames, sat_ts = load_himawari_alice(himawari_dir)
+        # Key on the RESOLVED frames file (not the dir) so overwriting frames.h5 busts
+        # the cache; include night_ghi_thresh since it selects which rows survive.
+        key_paths.append(find_himawari_file(himawari_dir))
+    key = _cache_key(key_paths, img_size, min_steps, cadence_min, night_ghi_thresh)
+    tag = "sat" if use_satellite else "nosat"
+    cache_path = Path(cache_dir) / f"aligned_{tag}_{key}.npz"
     if use_cache and cache_path.exists():
         z = np.load(cache_path, allow_pickle=False)
         ts = pd.to_datetime(z["timestamps"], utc=True)
-        return {"timestamps": ts, "pv": z["pv"], "meteo": z["meteo"], "sat": z["sat"]}
+        sat = z["sat"] if "sat" in z.files else None
+        return {"timestamps": ts, "pv": z["pv"], "meteo": z["meteo"], "sat": sat}
 
     pv, meteo = load_dkasc(dkasc_csv)
     grid = align_colocated(
@@ -79,10 +84,10 @@ def _load_aligned(
     data["timestamps"] = ts
     if use_cache:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(
-            cache_path, pv=data["pv"], meteo=data["meteo"], sat=data["sat"],
-            timestamps=ts.asi8,
-        )
+        arrays = {"pv": data["pv"], "meteo": data["meteo"], "timestamps": ts.asi8}
+        if data["sat"] is not None:
+            arrays["sat"] = data["sat"]
+        np.savez(cache_path, **arrays)
     return data
 
 
@@ -106,11 +111,14 @@ class DataPipeline:
         cache_dir: str = "data/cache",
         num_workers: int = 0,
         use_cache: bool = True,
+        use_satellite: bool = True,
         scaler_out: str | None = None,
     ) -> Splits:
+        # use_satellite=False -> PV+meteo only over the FULL DKASC span (train the
+        # baselines without waiting for the Himawari download); sat_seq is zeros.
         data = _load_aligned(
             dkasc_csv, himawari_dir, img_size, min_steps, cadence_min,
-            night_ghi_thresh, cache_dir, use_cache,
+            night_ghi_thresh, cache_dir, use_cache, use_satellite,
         )
         sat, meteo, pv = data["sat"], data["meteo"], data["pv"]
         n = len(pv)
@@ -126,16 +134,19 @@ class DataPipeline:
         meteo = apply_clip(meteo, m_lo, m_hi)
         pv = apply_clip(pv, p_lo, p_hi)
 
-        scalers = fit_scalers(meteo[b.train], pv[b.train], sat[b.train])
+        scalers = fit_scalers(meteo[b.train], pv[b.train], sat[b.train] if sat is not None else None)
         if scaler_out:
             scalers.save(scaler_out)
 
         meteo_s = scalers.transform_meteo(meteo)
         pv_s = scalers.transform_pv(pv)
-        sat_s = scalers.transform_sat(sat)
+        sat_s = scalers.transform_sat(sat) if sat is not None else None
 
         def make(sl) -> SolarWindowDataset:
-            return SolarWindowDataset(sat_s[sl], meteo_s[sl], pv_s[sl], k, HORIZON_STEPS)
+            return SolarWindowDataset(
+                sat_s[sl] if sat_s is not None else None,
+                meteo_s[sl], pv_s[sl], k, HORIZON_STEPS, img_size=img_size,
+            )
 
         train_ds, val_ds, test_ds = make(b.train), make(b.val), make(b.test)
         if len(train_ds) < min_train_windows:
@@ -163,6 +174,7 @@ class DataPipeline:
         meta = {
             "source": "dkasc_alice",
             "pv_units": "kW",
+            "use_satellite": use_satellite,
             "n_meteo_features": N_METEO_FEATURES,
             "sat_channels": SAT_CHANNELS,
             "img_size": img_size,
