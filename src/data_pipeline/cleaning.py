@@ -71,6 +71,7 @@ def clean_arrays(data: dict) -> dict:
     data = dict(data)
     data["pv"] = fill_residual_nans(data["pv"])
     data["meteo"] = fill_residual_nans(data["meteo"])
-    sat = np.nan_to_num(data["sat"], nan=0.0)
-    data["sat"] = np.clip(sat, 0.0, SAT_REFLECTANCE_MAX).astype("float32")
+    if data.get("sat") is not None:  # None in satellite-free (baseline-only) mode
+        sat = np.nan_to_num(data["sat"], nan=0.0)
+        data["sat"] = np.clip(sat, 0.0, SAT_REFLECTANCE_MAX).astype("float32")
     return data

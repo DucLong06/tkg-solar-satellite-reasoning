@@ -37,6 +37,23 @@ def test_loaders_nonempty(pipeline_splits):
     assert pipeline_splits.meta["n_test_windows"] > 0
 
 
+def test_satellite_free_mode(synthetic_data_dir):
+    """use_satellite=False trains baselines without Himawari; sat_seq is zeros."""
+    from src.data_pipeline import DataPipeline
+
+    splits = DataPipeline.load(
+        str(synthetic_data_dir / "dkasc" / "synthetic_array_2020_2022.csv"),
+        str(synthetic_data_dir / "himawari_alice"),
+        k=12, batch_size=16, img_size=64, min_steps=200,
+        use_satellite=False, use_cache=False,
+    )
+    assert splits.meta["use_satellite"] is False
+    batch = next(iter(splits.train_loader))
+    assert batch["sat_seq"].shape == (batch["meteo_seq"].shape[0], 12, SAT_CHANNELS, 64, 64)
+    assert float(batch["sat_seq"].abs().sum()) == 0.0  # zero frames (baselines ignore)
+    assert batch["meteo_seq"].shape[-1] == N_METEO_FEATURES
+
+
 def test_chronological_split_fractions():
     b = chronological_bounds(1000, 0.70, 0.15)
     assert b.train_end == 700 and b.val_end == 850 and b.total == 1000

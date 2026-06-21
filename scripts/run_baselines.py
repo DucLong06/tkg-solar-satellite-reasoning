@@ -76,6 +76,9 @@ def main() -> None:
     ap.add_argument("--out", default="plans/reports")
     ap.add_argument("--ablation", action="store_true",
                     help="also run the proposed-model branch ablation (Full/-sat/-graph/-meteo)")
+    ap.add_argument("--no-sat", action="store_true",
+                    help="baselines-only on FULL DKASC without Himawari (skips Proposed + ablation; "
+                         "run this first while the satellite download finishes)")
     args = ap.parse_args()
 
     cfg = Config.from_yaml(args.config) if Path(args.config).exists() else Config()
@@ -90,12 +93,16 @@ def main() -> None:
         train_frac=cfg.train_frac, val_frac=cfg.val_frac,
         cadence_min=cfg.cadence_min, night_ghi_thresh=cfg.night_ghi_thresh,
         cache_dir=cfg.cache_dir, num_workers=cfg.num_workers,
+        use_satellite=not args.no_sat,
     )
     print("Pipeline:", splits.meta)
 
+    # Proposed needs the satellite branch -> excluded in --no-sat (baselines-only) runs.
+    models = [m for m in MODELS if m != "Proposed"] if args.no_sat else MODELS
+
     results = {}
     skipped = {}
-    for name in MODELS:
+    for name in models:
         seed_everything(cfg.seed)  # same init seed per model for fair comparison
         try:
             model = build(name, cfg)
@@ -119,7 +126,7 @@ def main() -> None:
     ordering = relative_ordering(results)
 
     ablation_md = ""
-    if args.ablation:
+    if args.ablation and not args.no_sat:
         ablation = run_ablation(cfg, splits)
         ablation_md = (
             "\n\n## Ablation (proposed model arms, identical data/seed)\n\n"
