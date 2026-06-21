@@ -45,4 +45,9 @@ use_advanced_loss: false
 lambda_prob: 0.0
 lambda_physics: 0.0
 
-mape_min_value: 0.001
+# MAPE floor in kW: exclude near-zero (dawn/dusk) PV so |y|->0 doesn't blow MAPE up.
+# This is the leftover-from-normalized-[0,1] landmine: at 0.001 kW the MAPE explodes to
+# hundreds of %. Set to a few % of the array's rated power (here ~222 kW master meter
+# -> ~5 kW). Lower it proportionally for a smaller single array. MAE/RMSE (kW) and the
+# normalized [0,1] columns are the robust metrics; MAPE is fragile for PV.
+mape_min_value: 5.0
