@@ -16,7 +16,7 @@ dropout: 0.2
 
 # --- data (co-located DKASC + Himawari Alice, 5-min) ---
 # Set dkasc_csv to the downloaded array id (scripts/download_dkasc.py writes it).
-dkasc_csv: data/dkasc/synthetic_array_2020_2022.csv
+dkasc_csv: data/dkasc/alice_2020_2022_clean.csv
 himawari_dir: data/himawari_alice
 cadence_min: 5
 night_ghi_thresh: 5.0
