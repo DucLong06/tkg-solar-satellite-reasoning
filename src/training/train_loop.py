@@ -113,19 +113,24 @@ def fit(
     # restarting from epoch 0. Only active when resume=True; the resume file is
     # rewritten every epoch below, so it must live on persistent storage (Drive).
     if resume and last_path.exists():
-        ck = torch.load(last_path, map_location=device, weights_only=False)
-        model.load_state_dict(ck["model_state"])
-        optimizer.load_state_dict(ck["optimizer_state"])
-        for state in optimizer.state.values():  # optimizer tensors -> training device
-            for k, v in state.items():
-                if torch.is_tensor(v):
-                    state[k] = v.to(device)
-        start_epoch = ck["epoch"] + 1
-        best_val = ck["best_val"]
-        patience = ck["patience"]
-        history = ck["history"]
-        if verbose:
-            tqdm.write(f"{label}: resume from epoch {start_epoch} (best val_mae={best_val:.5f})")
+        try:
+            ck = torch.load(last_path, map_location=device, weights_only=False)
+            model.load_state_dict(ck["model_state"])
+            optimizer.load_state_dict(ck["optimizer_state"])
+            for state in optimizer.state.values():  # optimizer tensors -> training device
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.to(device)
+            start_epoch = ck["epoch"] + 1
+            best_val = ck["best_val"]
+            patience = ck["patience"]
+            history = ck["history"]
+            if verbose:
+                tqdm.write(f"{label}: resume from epoch {start_epoch} (best val_mae={best_val:.5f})")
+        except Exception as e:  # stale/incompatible checkpoint (e.g. old feature count) -> fresh
+            tqdm.write(f"{label}: cannot resume ({type(e).__name__}: {e}); deleting stale checkpoint, training fresh")
+            last_path.unlink(missing_ok=True)
+            best_path.unlink(missing_ok=True)
 
     for epoch in range(start_epoch, config.epochs):
         model.train()
