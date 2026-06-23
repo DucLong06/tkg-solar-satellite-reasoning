@@ -113,7 +113,11 @@ def main() -> None:
             else:
                 print(f"\n=== Training {name} ===")
                 fit(model, splits, cfg, verbose=False)
-            metrics = evaluate_model(model, splits.test_loader, splits.scalers, cfg.device, cfg.mape_min_value)
+            # ARIMA fits one model per window -> subsample + progress bar so it
+            # finishes in minutes instead of hours.
+            mw = 2000 if name == "ARIMA" else None
+            metrics = evaluate_model(model, splits.test_loader, splits.scalers, cfg.device,
+                                     cfg.mape_min_value, max_windows=mw, progress=(name == "ARIMA"))
         except ImportError as e:  # optional dep missing (e.g. statsmodels for ARIMA)
             skipped[name] = str(e)
             print(f"SKIP {name}: {e}")

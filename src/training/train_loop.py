@@ -40,11 +40,16 @@ def _amp_setup(config):
 
 
 @torch.no_grad()
-def predict_loader(model: nn.Module, loader: DataLoader, device: str):
-    """Return (y_true_scaled, y_pred_scaled) stacked over the loader."""
+def predict_loader(model: nn.Module, loader: DataLoader, device: str, progress: bool = False):
+    """Return (y_true_scaled, y_pred_scaled) stacked over the loader.
+
+    ``progress=True`` shows a tqdm bar over batches (useful for the slow per-window
+    ARIMA eval, which otherwise runs silently for a long time).
+    """
     model.eval()
     yts, yps = [], []
-    for batch in loader:
+    it = tqdm(loader, desc="eval", leave=False) if progress else loader
+    for batch in it:
         batch = _to_device(batch, device)
         pred = model(batch)
         yps.append(pred.cpu())
