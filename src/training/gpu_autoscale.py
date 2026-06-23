@@ -22,8 +22,15 @@ def detect_vram_gb() -> float | None:
 
 
 def supports_bf16() -> bool:
-    """True if the CUDA device supports bf16 (A100/Ampere+)."""
-    return torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    """True only for NATIVE bf16 (Ampere sm_80+: A100/L4/H100).
+
+    ``torch.cuda.is_bf16_supported()`` returns True on T4/V100 too (slow emulation),
+    so we gate on compute capability instead -> those fall back to fp16.
+    """
+    if not torch.cuda.is_available():
+        return False
+    major, _ = torch.cuda.get_device_capability()
+    return major >= 8
 
 
 def pick_batch(vram_gb: float | None, img_size: int) -> tuple[int, int]:
