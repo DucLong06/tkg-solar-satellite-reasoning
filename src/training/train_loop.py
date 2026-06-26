@@ -192,30 +192,31 @@ def fit(
                 break
 
         # Rewrite the resume checkpoint after every completed epoch so a mid-run
-        # interruption loses at most the current epoch, not the whole run. done=False
-        # marks it as still-in-progress (a callers' skip/retrain prompt keys on this).
-        if resume:
-            torch.save(
-                {
-                    "model_state": model.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "epoch": epoch,
-                    "best_val": best_val,
-                    "patience": patience,
-                    "history": history,
-                    "done": False,
-                },
-                last_path,
-            )
+        # interruption loses at most the current epoch, not the whole run. ALWAYS
+        # written (not only when resume=True) so even a first/fresh run is resumable;
+        # the `resume` flag only controls whether an existing checkpoint is LOADED at
+        # start. done=False marks it still-in-progress.
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "epoch": epoch,
+                "best_val": best_val,
+                "patience": patience,
+                "history": history,
+                "done": False,
+            },
+            last_path,
+        )
 
     history["best_val_mae"] = best_val
     history["best_checkpoint"] = str(best_path)
     if best_path.exists():
         model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True)["model_state"])
 
-    # Training ran to completion (early-stop or max epochs). Stamp the resume file
-    # done=True so a re-run can offer skip-vs-retrain instead of resuming.
-    if resume and last_path.exists():
+    # Training ran to completion (early-stop or max epochs). Stamp the checkpoint
+    # done=True so a re-run skips instead of resuming.
+    if last_path.exists():
         ck = torch.load(last_path, map_location="cpu", weights_only=False)
         ck["done"] = True
         torch.save(ck, last_path)
