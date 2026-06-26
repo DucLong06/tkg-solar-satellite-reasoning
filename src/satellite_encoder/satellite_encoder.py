@@ -13,6 +13,7 @@ from __future__ import annotations
 import timm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.common.shapes import EMBED_DIM, SAT_CHANNELS, assert_embedding
 from src.satellite_encoder.channel_adapter import ChannelAdapter
@@ -39,6 +40,14 @@ class SatelliteEncoder(nn.Module):
                 p.requires_grad = False
         feat_dim = self.backbone.num_features
 
+        # ViT-type backbones need a FIXED input size (e.g. 224). To avoid pre-resizing
+        # the whole aligned satellite array to 224 in the data pipeline (huge: ~10 GB
+        # for a multi-year run + slow load), keep frames at their native crop size and
+        # upsample per batch HERE, on GPU. resnet-type backbones accept any size -> skip.
+        cfg = getattr(self.backbone, "pretrained_cfg", {}) or {}
+        self._req_size = cfg.get("input_size", (3, 224, 224))[-1]
+        self._needs_resize = hasattr(self.backbone, "patch_embed")  # ViT family
+
         self.frame_proj = nn.Linear(feat_dim, out_dim)
         layer = nn.TransformerEncoderLayer(
             d_model=out_dim, nhead=n_heads, dim_feedforward=out_dim * 2,
@@ -51,6 +60,9 @@ class SatelliteEncoder(nn.Module):
         # sat_seq: [B, T, C, H, W]
         b, t, c, h, w = sat_seq.shape
         x = sat_seq.reshape(b * t, c, h, w)
+        if self._needs_resize and h != self._req_size:   # 64 -> 224 for ViT, per batch on GPU
+            x = F.interpolate(x, size=(self._req_size, self._req_size),
+                              mode="bilinear", align_corners=False)
         x = self.channel_adapter(x)              # [B*T, 3, H, W]
         x = self.backbone(x)                     # [B*T, feat_dim]
         x = self.frame_proj(x).reshape(b, t, -1)  # [B, T, out_dim]
