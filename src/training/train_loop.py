@@ -57,6 +57,26 @@ def predict_loader(model: nn.Module, loader: DataLoader, device: str, progress: 
     return torch.cat(yts), torch.cat(yps)
 
 
+def _build_scheduler(optimizer, config):
+    """LR scheduler from config.lr_scheduler ("none" | "plateau" | "cosine").
+
+    plateau: halve LR after `lr_patience` epochs without val improvement (keep
+    lr_patience < early_stop_patience so LR drops before the run early-stops).
+    cosine: anneal over the full epoch budget. "none" -> constant LR (default,
+    so baselines / smoke runs are bit-identical unless their config opts in).
+    """
+    name = getattr(config, "lr_scheduler", "none")
+    if name == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min",
+            factor=getattr(config, "lr_factor", 0.5),
+            patience=getattr(config, "lr_patience", 5),
+        )
+    if name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
+    return None
+
+
 def evaluate_mae(model, loader, scalers: Scalers, device: str, mape_min_value: float) -> dict:
     yt, yp = predict_loader(model, loader, device)
     return compute_all(scalers.inverse_pv(yt.numpy()), scalers.inverse_pv(yp.numpy()), mape_min_value)
@@ -86,7 +106,13 @@ def fit(
     autocast_ctx, scaler = _amp_setup(config)
     accum = max(1, getattr(config, "grad_accum_steps", 1))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    # Only optimise params that require grad: a frozen ViT backbone contributes
+    # none, so AdamW won't carry decay/state for parameters it can't update.
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(
+        trainable, lr=config.lr, weight_decay=getattr(config, "weight_decay", 0.0)
+    )
+    scheduler = _build_scheduler(optimizer, config)
     loss_fn = loss_fn or nn.MSELoss()
 
     # Per-batch progress: one transient bar per epoch (leave=False -> it clears
@@ -125,6 +151,8 @@ def fit(
             best_val = ck["best_val"]
             patience = ck["patience"]
             history = ck["history"]
+            if scheduler is not None and ck.get("scheduler_state") is not None:
+                scheduler.load_state_dict(ck["scheduler_state"])
             if verbose:
                 tqdm.write(f"{label}: resume from epoch {start_epoch} (best val_mae={best_val:.5f})")
         except Exception as e:  # stale/incompatible checkpoint (e.g. old feature count) -> fresh
@@ -174,6 +202,11 @@ def fit(
         val = evaluate_mae(model, splits.val_loader, splits.scalers, device, config.mape_min_value)
         history["train_loss"].append(train_loss)
         history["val_mae"].append(val["mae"])
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val["mae"])
+            else:
+                scheduler.step()
         if verbose:
             tqdm.write(
                 f"{label} ep {epoch + 1}/{config.epochs}: "
@@ -204,6 +237,7 @@ def fit(
                 "best_val": best_val,
                 "patience": patience,
                 "history": history,
+                "scheduler_state": scheduler.state_dict() if scheduler else None,
                 "done": False,
             },
             last_path,

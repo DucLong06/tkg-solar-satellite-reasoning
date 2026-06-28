@@ -26,6 +26,10 @@ class Config:
     epochs: int = 200
     early_stop_patience: int = 20
     grad_clip: float = 1.0
+    weight_decay: float = 0.0          # AdamW L2 decay; 0.0 == plain Adam behaviour
+    lr_scheduler: str = "none"         # "none" | "plateau" | "cosine"
+    lr_factor: float = 0.5             # plateau: LR *= factor on a val stall
+    lr_patience: int = 5               # plateau: epochs to wait (< early_stop_patience)
 
     # --- architecture (paper Table 5) ---
     embed_dim: int = EMBED_DIM        # 128, locked
