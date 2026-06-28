@@ -9,6 +9,10 @@ batch_size: 64
 epochs: 200
 early_stop_patience: 20
 grad_clip: 1.0
+weight_decay: 0.01     # AdamW decay — regularises the trainable heads/fusion
+lr_scheduler: plateau  # halve LR after lr_patience stalled epochs, smooths val
+lr_factor: 0.5
+lr_patience: 5
 
 embed_dim: 128
 n_heads: 4
@@ -31,7 +35,7 @@ n_graph_nodes: 8
 
 sat_backbone: vit_base_patch16_224
 pretrained_backbone: true
-freeze_backbone: false
+freeze_backbone: true   # ViT frozen as feature extractor: 87M->~1M trainable, kills overfit
 
 # --- GPU utilization (A100); CPU run ignores these and stays fp32 ---
 precision: auto        # -> bf16 on A100/Ampere, fp16 elsewhere, fp32 on CPU
