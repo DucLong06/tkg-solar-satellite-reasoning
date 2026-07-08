@@ -1,0 +1,57 @@
+# DKASC Alice Springs reproduction config. GPU strongly recommended.
+# Train on Colab Pro A100 / an SSH GPU box; set device: cuda there.
+seed: 42
+device: cpu            # set to "cuda" on a GPU machine
+model: full
+
+lr: 0.0001             # 1e-4
+batch_size: 64
+epochs: 200
+early_stop_patience: 20
+grad_clip: 1.0
+weight_decay: 0.01     # AdamW decay — regularises the trainable heads/fusion
+lr_scheduler: plateau  # halve LR after lr_patience stalled epochs, smooths val
+lr_factor: 0.5
+lr_patience: 5
+
+embed_dim: 128
+n_heads: 4
+dropout: 0.2
+
+# --- data (co-located DKASC + Himawari Alice, 5-min) ---
+# Set dkasc_csv to the downloaded array id (scripts/download_dkasc.py writes it).
+dkasc_csv: data/dkasc/alice_2020_2022_clean.csv
+himawari_dir: data/himawari_alice
+cadence_min: 5
+night_ghi_thresh: 5.0
+# Fixed-date split: train 2020-01..2021-09, val 2021-10..12, test 2022.
+train_end: "2021-10-01"
+val_end: "2022-01-01"
+
+k: 12
+img_size: 224          # ViT input size
+min_steps: 2000
+n_graph_nodes: 8
+
+sat_backbone: vit_base_patch16_224
+pretrained_backbone: true
+freeze_backbone: true   # ViT frozen as feature extractor: 87M->~1M trainable, kills overfit
+
+# --- GPU utilization (A100); CPU run ignores these and stays fp32 ---
+precision: auto        # -> bf16 on A100/Ampere, fp16 elsewhere, fp32 on CPU
+auto_batch: true       # size batch + grad_accum from detected VRAM
+grad_accum_steps: 1    # overridden by auto_batch on cuda
+channels_last: false   # enable for conv backbones (resnet); ViT gains little
+compile: false         # torch.compile (eager fallback on the dynamic GAT)
+
+# Advanced loss (M10): off by default; enable only after MSE full-model reproduces ordering.
+use_advanced_loss: false
+lambda_prob: 0.0
+lambda_physics: 0.0
+
+# MAPE floor in kW: exclude near-zero (dawn/dusk) PV so |y|->0 doesn't blow MAPE up.
+# This is the leftover-from-normalized-[0,1] landmine: at 0.001 kW the MAPE explodes to
+# hundreds of %. Set to a few % of the array's rated power (here ~222 kW master meter
+# -> ~5 kW). Lower it proportionally for a smaller single array. MAE/RMSE (kW) and the
+# normalized [0,1] columns are the robust metrics; MAPE is fragile for PV.
+mape_min_value: 5.0

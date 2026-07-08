@@ -1,0 +1,26 @@
+# Real-data run: OPSD (EU power) + NSRDB (HCM 2016) + Himawari-8 (VN, 01-03/06/2016, 10-min).
+# Small real window -> lowered min_steps; CPU-friendly resnet18 with cached ImageNet weights.
+seed: 42
+device: cpu
+model: lstm           # baseline column
+
+lr: 0.0005
+batch_size: 16
+epochs: 60
+early_stop_patience: 15
+
+embed_dim: 128
+n_heads: 4
+dropout: 0.2
+
+k: 12
+img_size: 64
+min_steps: 150         # 3-day 10-min daytime window yields ~180 aligned steps
+n_graph_nodes: 8
+
+sat_backbone: resnet18
+pretrained_backbone: true    # ImageNet weights already cached locally
+freeze_backbone: false
+
+use_advanced_loss: false
+mape_min_value: 0.001

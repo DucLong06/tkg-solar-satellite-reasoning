@@ -1,0 +1,39 @@
+# Data & model artifacts (never commit — large, and may carry API-pulled content)
+data/
+checkpoints/
+*.h5
+*.hdf5
+*.csv
+*.pt
+*.npz
+*.npy
+
+# Python env / caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.uv/
+uv.lock
+
+# Secrets
+.env
+*.key
+
+# Notebooks scratch
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+
+# Local AI tooling / planning / docs (not part of the runnable project)
+.claude/
+docs/
+plans/
+CLAUDE.md
+pland.md
+Paper/
+
+# Upload bundles (large data tarballs)
+data_upload/
