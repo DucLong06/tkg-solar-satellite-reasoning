@@ -27,6 +27,7 @@ class SatelliteEncoder(nn.Module):
         backbone: str = "resnet18",
         pretrained: bool = False,
         freeze_backbone: bool = False,
+        unfreeze_last_blocks: int = 0,
         n_heads: int = 4,
         dropout: float = 0.2,
     ) -> None:
@@ -35,7 +36,23 @@ class SatelliteEncoder(nn.Module):
         self.backbone = timm.create_model(
             backbone, pretrained=pretrained, in_chans=3, num_classes=0
         )
-        if freeze_backbone:
+        # Partial fine-tune: freeze the whole backbone, then re-enable the last N
+        # transformer blocks + final norm. Refines (and overrides) freeze_backbone,
+        # so a frozen-ViT config can flip to partial fine-tune with one knob.
+        if unfreeze_last_blocks > 0:
+            if not hasattr(self.backbone, "blocks"):
+                raise ValueError(
+                    f"unfreeze_last_blocks needs a ViT-style backbone with .blocks; "
+                    f"'{backbone}' has none"
+                )
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+            for blk in self.backbone.blocks[-unfreeze_last_blocks:]:
+                for p in blk.parameters():
+                    p.requires_grad = True
+            for p in self.backbone.norm.parameters():
+                p.requires_grad = True
+        elif freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
         feat_dim = self.backbone.num_features

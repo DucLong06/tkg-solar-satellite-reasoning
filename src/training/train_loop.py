@@ -57,6 +57,31 @@ def predict_loader(model: nn.Module, loader: DataLoader, device: str, progress: 
     return torch.cat(yts), torch.cat(yps)
 
 
+def _build_optimizer(model: nn.Module, config) -> torch.optim.AdamW:
+    """AdamW over trainable params; discriminative LR on a partially-unfrozen ViT.
+
+    Only optimise params that require grad: a frozen ViT backbone contributes
+    none, so AdamW won't carry decay/state for parameters it can't update.
+    When ``unfreeze_last_blocks`` > 0 the trainable backbone params go into their
+    own param group at ``lr * backbone_lr_scale`` (pretrained features need
+    smaller steps than the freshly-initialised heads); every other config keeps
+    the original single-group behaviour bit-identical.
+    """
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    wd = getattr(config, "weight_decay", 0.0)
+    n_unfrozen = getattr(config, "unfreeze_last_blocks", 0)
+    backbone = getattr(getattr(model, "sat_encoder", None), "backbone", None)
+    if n_unfrozen > 0 and backbone is not None:
+        bb_ids = {id(p) for p in backbone.parameters()}
+        groups = [
+            {"params": [p for p in trainable if id(p) not in bb_ids]},
+            {"params": [p for p in trainable if id(p) in bb_ids],
+             "lr": config.lr * getattr(config, "backbone_lr_scale", 0.1)},
+        ]
+        return torch.optim.AdamW(groups, lr=config.lr, weight_decay=wd)
+    return torch.optim.AdamW(trainable, lr=config.lr, weight_decay=wd)
+
+
 def _build_scheduler(optimizer, config):
     """LR scheduler from config.lr_scheduler ("none" | "plateau" | "cosine").
 
@@ -106,12 +131,7 @@ def fit(
     autocast_ctx, scaler = _amp_setup(config)
     accum = max(1, getattr(config, "grad_accum_steps", 1))
 
-    # Only optimise params that require grad: a frozen ViT backbone contributes
-    # none, so AdamW won't carry decay/state for parameters it can't update.
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(
-        trainable, lr=config.lr, weight_decay=getattr(config, "weight_decay", 0.0)
-    )
+    optimizer = _build_optimizer(model, config)
     scheduler = _build_scheduler(optimizer, config)
     loss_fn = loss_fn or nn.MSELoss()
 

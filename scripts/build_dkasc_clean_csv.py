@@ -17,7 +17,7 @@ schema ``load_dkasc`` expects — ``timestamp, Pac, GHI, Tamb, RH, WS`` — doin
 Run:
     python scripts/build_dkasc_clean_csv.py \
         --raw data/dkasc/96-Site_DKA-MasterMeter1.csv \
-        --out data/dkasc/alice_2020_2022_clean.csv \
+        --out data/dkasc/alice_2020_2023_clean.csv \
         --lat -23.76 --lon 133.87
 """
 
@@ -97,7 +97,7 @@ def main() -> None:
     ap.add_argument("--lat", type=float, default=-23.76)
     ap.add_argument("--lon", type=float, default=133.87)
     ap.add_argument("--start", default="2020-01-01")
-    ap.add_argument("--end", default="2022-12-31")
+    ap.add_argument("--end", default="2023-12-31")
     args = ap.parse_args()
 
     print(f"Cleaning DKASC {args.raw} -> {args.start}..{args.end} (ACST->UTC)...", flush=True)

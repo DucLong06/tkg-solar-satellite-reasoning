@@ -53,6 +53,8 @@ class Config:
     sat_backbone: str = "resnet18"    # lightweight default; "vit_base_patch16_224" for paper
     pretrained_backbone: bool = False  # offline-friendly default; True downloads weights
     freeze_backbone: bool = False
+    unfreeze_last_blocks: int = 0     # >0: freeze backbone except last N ViT blocks + norm
+    backbone_lr_scale: float = 0.1    # backbone LR = lr * this (only when unfreezing blocks)
 
     # --- GPU utilization (CUDA only; CPU keeps fp32, accum=1) ---
     precision: str = "fp32"           # "fp32" | "bf16" | "fp16" | "auto" (pick on cuda)

@@ -29,7 +29,7 @@ power at **10 / 30 / 60-minute horizons**, runnable end-to-end with a single
 ```mermaid
 flowchart LR
     subgraph Data["Co-located inputs (Alice Springs)"]
-        SAT["Himawari-8 frames<br/>(10-min cadence)"]
+        SAT["Himawari-8/9 frames<br/>(10-min cadence)"]
         MET["Meteorology<br/>(irradiance, temp, wind)"]
         PV["DKASC PV history"]
     end
@@ -48,12 +48,16 @@ flowchart LR
 
 | Source | What | How it's fetched |
 |--------|------|------------------|
-| [DKASC Alice Springs](https://dkasolarcentre.com.au/) | PV master-meter output (2020–2022), cleaned to a canonical UTC schema | `scripts/download_dkasc.py` → `scripts/build_dkasc_clean_csv.py` |
-| Himawari-8 AHI | Satellite reflectance frames over Alice Springs, 10-min cadence, from the AWS open-data archive | `scripts/download_himawari.py` / `scripts/build_himawari_frames.py` |
+| [DKASC Alice Springs](https://dkasolarcentre.com.au/) | PV master-meter output (2020–2023), cleaned to a canonical UTC schema | `scripts/download_dkasc.py` → `scripts/build_dkasc_clean_csv.py` |
+| Himawari-8/9 AHI | Satellite reflectance frames over Alice Springs, 10-min cadence, from the AWS open-data archive (Himawari-8 through 2022-12-13, Himawari-9 after) | `scripts/download_himawari.py` / `scripts/build_himawari_frames.py` |
 | ERA5 (via Open-Meteo) | Wind backfill — the site anemometer is dead after 2016 | `scripts/build_dkasc_clean_csv.py` (automatic) |
 
 All three modalities are geographically **co-located**, unlike an earlier
 iteration of this reproduction that mixed European PV with Asian satellite data.
+
+**Fixed benchmark split:** train 2020-01 → 2022-06 · val 2022-07 → 2022-12 ·
+test **2023 (full year)**. Baselines share the satellite-aligned windows and
+scaler with **TKG-Solar**, so the comparison is same-condition.
 
 ## Repository layout
 
@@ -80,11 +84,11 @@ uv sync --extra dev
 #    (a) Synthetic smoke data (no keys, runs anywhere):
 uv run python scripts/generate_synthetic_data.py --days 30
 
-#    (b) Real co-located data (DKASC + Himawari-8):
-uv run python scripts/download_dkasc.py --start 2020-01-01 --end 2022-12-31
+#    (b) Real co-located data (DKASC + Himawari-8/9):
+uv run python scripts/download_dkasc.py --start 2020-01-01 --end 2023-12-31
 uv run python scripts/build_dkasc_clean_csv.py \
     --raw data/dkasc/96-Site_DKA-MasterMeter1.csv \
-    --out data/dkasc/alice_2020_2022_clean.csv
+    --out data/dkasc/alice_2020_2023_clean.csv
 uv run python scripts/build_himawari_frames.py --start 2020-01-01 --end 2020-01-07
 
 # 3. Run
@@ -107,26 +111,32 @@ uv run pytest
 | [`data_pipeline_walkthrough.ipynb`](notebooks/data_pipeline_walkthrough.ipynb) | Step-by-step data pipeline (load → align → clean → split → clip → scale → window) with formulas |
 | [`results_analysis.ipynb`](notebooks/results_analysis.ipynb) | Predicted-vs-actual analysis and per-horizon error breakdown |
 
-## Results (preliminary)
+## Results
 
-Baselines on DKASC Alice Springs (normalized [0,1] metrics; kW columns are
-inverse-scaled). Paper values shown where the paper reports that model:
+Same-condition benchmark on DKASC Alice Springs — **test = full year 2023**
+(train 2020-01→2022-06, val 2022-07→12). All models share the
+satellite-aligned windows, scaler, and seed; metrics are inverse-scaled kW.
 
-| Model | MAE | RMSE | MAPE % | MAE (kW) | RMSE (kW) | Paper MAE |
-|-------|------|------|--------|----------|-----------|-----------|
-| Persistence | 0.088 | 0.132 | 41.19 | 19.17 | 28.60 | — |
-| ARIMA | 0.076 | 0.136 | 34.53 | 16.41 | 29.42 | — |
-| LSTM | 0.063 | 0.102 | 28.15 | 13.64 | 22.00 | 0.128 |
-| GRU | 0.055 | 0.097 | 25.92 | 11.86 | 21.00 | 0.121 |
-| Transformer | 0.065 | 0.106 | 29.07 | 13.99 | 23.02 | 0.109 |
-| Temporal-GNN | 0.051 | 0.093 | 23.57 | 11.11 | 20.25 | 0.097 |
+| # | Model | MAE (kW) | RMSE (kW) | MAPE % |
+|---|-------|----------|-----------|--------|
+| 1 | Temporal-GNN | **11.47** | 21.04 | 24.90 |
+| 2 | **TKG-Solar** (frozen ViT) | 11.90 | **20.37** | **24.10** |
+| 3 | GRU | 12.32 | 21.61 | 26.45 |
+| 4 | LSTM | 12.77 | 22.03 | 27.35 |
+| 5 | Transformer | 13.00 | 22.46 | 27.63 |
+| 6 | ARIMA | 18.78 | 35.50 | 38.36 |
+| 7 | Persistence | 20.96 | 30.54 | 40.07 |
 
-> **Status of the proposed TKG model.** Early short-window runs overfit
-> (the full model underperformed the LSTM baseline), so it is being retrained
-> with a frozen ViT backbone, AdamW weight decay, and LR-plateau scheduling on
-> the extended multi-year dataset. Numbers will be updated when that run
-> completes. Absolute values are not directly comparable to the paper's
-> (different site, scale, and time span) — relative ordering is the target.
+**TKG-Solar** has the **best RMSE and MAPE of all models** and is second on
+MAE (−0.42 kW vs Temporal-GNN), beating GRU/LSTM/Transformer. No overfit:
+val MAE 13.79 vs test MAE 11.90, with early stopping (epoch 22).
+
+TKG-Solar per-horizon (test 2023): 10 min MAE 8.99 · 30 min 11.89 · 60 min
+14.80 kW.
+
+> Pending: Run B (unfreeze last 2 ViT blocks) and the ±sat/±graph/±meteo
+> ablation. Absolute values are not comparable to the paper's (different site,
+> scale, and time span) — relative ordering is the target.
 
 ## Compute note
 

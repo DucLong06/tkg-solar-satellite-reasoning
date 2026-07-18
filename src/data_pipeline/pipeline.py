@@ -84,7 +84,11 @@ def _load_aligned(
     data["timestamps"] = ts
     if use_cache:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        arrays = {"pv": data["pv"], "meteo": data["meteo"], "timestamps": ts.asi8}
+        # as_unit('ns'): asi8 must be nanoseconds — pandas 2.x indexes parsed from ISO
+        # strings can be datetime64[us], whose asi8 (microseconds) would be misread as
+        # ns on reload, shifting every timestamp to 1970 and breaking date splits.
+        arrays = {"pv": data["pv"], "meteo": data["meteo"],
+                  "timestamps": ts.as_unit("ns").asi8}
         if data["sat"] is not None:
             arrays["sat"] = data["sat"]
         np.savez(cache_path, **arrays)

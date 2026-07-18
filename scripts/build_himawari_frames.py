@@ -1,4 +1,4 @@
-"""Build real Himawari-8 frames.h5 from the NOAA AWS open bucket.
+"""Build real Himawari-8/9 frames.h5 from the NOAA AWS open buckets.
 
 Completes the acquisition the repo's download_himawari.py left as a TODO: for each
 UTC timestep it downloads the B03 visible segment (era-dependent: R05 0.5 km ~17 MB
@@ -62,8 +62,19 @@ import numpy as np
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-BUCKET = "noaa-himawari8"
 PREFIX = "AHI-L1b-FLDK"
+
+# Himawari-8 ops ended 2022-12-13 ~05:00 UTC; Himawari-9 (same AHI sensor, same
+# FLDK tile layout) took over the same day. Frames on/after the handover day come
+# from the H9 bucket; already-stored H8 frames that morning are resume-skipped.
+H9_CUTOVER = datetime(2022, 12, 13)
+
+
+def bucket_for(day: datetime) -> tuple[str, str]:
+    """(s3 bucket, satellite filename tag) for a given UTC day."""
+    if day < H9_CUTOVER:
+        return "noaa-himawari8", "H08"
+    return "noaa-himawari9", "H09"
 
 # Built-in region bounding boxes: (lon_min, lat_min, lon_max, lat_max).
 VN_BBOX = (102.0, 8.0, 110.0, 24.0)
@@ -134,10 +145,10 @@ def segment_for_lat(lat: float, n_segments: int = 10) -> str:
     return f"S{seg:02d}{n_segments:02d}"
 
 
-def seg_key(day: datetime, hour: int, minute: int, resolution: str, segment: str) -> str:
+def seg_key(day: datetime, hour: int, minute: int, resolution: str, segment: str, sat: str) -> str:
     hm = f"{hour:02d}{minute:02d}"
     s = f"{day:%Y/%m/%d}/{hm}"
-    name = f"HS_H08_{day:%Y%m%d}_{hm}_B03_FLDK_{resolution}_{segment}.DAT.bz2"
+    name = f"HS_{sat}_{day:%Y%m%d}_{hm}_B03_FLDK_{resolution}_{segment}.DAT.bz2"
     return f"{PREFIX}/{s}/{name}"
 
 
@@ -186,12 +197,12 @@ def _worker_init(
     _RAW.mkdir(parents=True, exist_ok=True)
 
 
-def _process_timestep(task: tuple[str, str]):
-    """task = (stamp, s3_key). Returns (stamp, frame[H,W] | None, reason)."""
-    stamp, key = task
+def _process_timestep(task: tuple[str, str, str]):
+    """task = (stamp, bucket, s3_key). Returns (stamp, frame[H,W] | None, reason)."""
+    stamp, bucket, key = task
     bz = _RAW / Path(key).name
     try:
-        _S3.download_file(BUCKET, key, str(bz))
+        _S3.download_file(bucket, key, str(bz))
     except Exception as exc:  # noqa: BLE001 (missing timestep on AWS -> skip)
         bz.unlink(missing_ok=True)
         return stamp, None, f"download:{type(exc).__name__}"
@@ -247,16 +258,17 @@ def append_frame(f, arr: np.ndarray, stamp: str) -> None:
 
 
 def build_tasks(start, end, hours, step_min, done, resolution, segment):
-    """All (stamp, key) timesteps in range not already stored."""
+    """All (stamp, bucket, key) timesteps in range not already stored."""
     minutes = list(range(0, 60, step_min))
     tasks = []
     for day in daterange(start, end):
+        bucket, sat = bucket_for(day)
         for hour in hours:
             for minute in minutes:
                 stamp = f"{day:%Y-%m-%d}T{hour:02d}:{minute:02d}:00Z"
                 if stamp in done:
                     continue
-                tasks.append((stamp, seg_key(day, hour, minute, resolution, segment)))
+                tasks.append((stamp, bucket, seg_key(day, hour, minute, resolution, segment, sat)))
     return tasks
 
 

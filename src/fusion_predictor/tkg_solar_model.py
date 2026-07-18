@@ -59,6 +59,7 @@ class TKGSolarModel(nn.Module):
         sat = SatelliteEncoder(
             out_dim=EMBED_DIM, backbone=cfg.sat_backbone,
             pretrained=cfg.pretrained_backbone, freeze_backbone=cfg.freeze_backbone,
+            unfreeze_last_blocks=getattr(cfg, "unfreeze_last_blocks", 0),
             n_heads=cfg.n_heads, dropout=cfg.dropout,
         )
         meteo = MeteoEncoder(hidden_dim=EMBED_DIM, out_dim=EMBED_DIM, n_heads=cfg.n_heads, dropout=cfg.dropout)
