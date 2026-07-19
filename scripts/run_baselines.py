@@ -76,9 +76,15 @@ def main() -> None:
     ap.add_argument("--out", default="plans/reports")
     ap.add_argument("--ablation", action="store_true",
                     help="also run the proposed-model branch ablation (Full/-sat/-graph/-meteo)")
+    ap.add_argument("--skip-proposed", action="store_true",
+                    help="baselines-only on the satellite-ALIGNED splits — same windows + scaler "
+                         "as the Proposed model (frames load but baselines ignore them). Use this "
+                         "for the fair same-condition benchmark table.")
     ap.add_argument("--no-sat", action="store_true",
-                    help="baselines-only on FULL DKASC without Himawari (skips Proposed + ablation; "
-                         "run this first while the satellite download finishes)")
+                    help="baselines-only on FULL DKASC without Himawari (skips Proposed + ablation). "
+                         "WARNING: alignment switches to the full DKASC span -> windows/scaler differ "
+                         "from satellite-aligned runs; NOT comparable with Proposed. For a fair "
+                         "benchmark use --skip-proposed instead.")
     args = ap.parse_args()
 
     cfg = Config.from_yaml(args.config) if Path(args.config).exists() else Config()
@@ -97,8 +103,10 @@ def main() -> None:
     )
     print("Pipeline:", splits.meta)
 
-    # Proposed needs the satellite branch -> excluded in --no-sat (baselines-only) runs.
-    models = [m for m in MODELS if m != "Proposed"] if args.no_sat else MODELS
+    # Proposed is excluded in baselines-only runs: --no-sat lacks the satellite branch;
+    # --skip-proposed trains it separately (Colab) on the same splits.
+    baselines_only = args.no_sat or args.skip_proposed
+    models = [m for m in MODELS if m != "Proposed"] if baselines_only else MODELS
 
     results = {}
     skipped = {}
@@ -141,6 +149,7 @@ def main() -> None:
         "# DKASC Alice Springs Benchmark (G1 rigorous ranking)\n\n"
         f"Config: `{args.config}` | split: {splits.meta.get('split_mode')} | "
         f"PV units: {splits.meta.get('pv_units')}\n\n"
+        f"splits.meta fingerprint (same-condition audit): `{splits.meta}`\n\n"
         f"{table}\n\n"
         f"**Relative ordering (best->worst MAE):** {' < '.join(ordering)}\n"
         + ("".join(f"\n> SKIPPED {n}: {m}\n" for n, m in skipped.items()) if skipped else "")

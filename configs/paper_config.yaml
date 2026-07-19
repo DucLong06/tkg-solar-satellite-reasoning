@@ -18,15 +18,15 @@ embed_dim: 128
 n_heads: 4
 dropout: 0.2
 
-# --- data (co-located DKASC + Himawari Alice, 5-min) ---
+# --- data (co-located DKASC + Himawari-8/9 Alice, 5-min) ---
 # Set dkasc_csv to the downloaded array id (scripts/download_dkasc.py writes it).
-dkasc_csv: data/dkasc/alice_2020_2022_clean.csv
+dkasc_csv: data/dkasc/alice_2020_2023_clean.csv
 himawari_dir: data/himawari_alice
 cadence_min: 5
 night_ghi_thresh: 5.0
-# Fixed-date split: train 2020-01..2021-09, val 2021-10..12, test 2022.
-train_end: "2021-10-01"
-val_end: "2022-01-01"
+# Fixed-date split: train 2020-01..2022-06, val 2022-07..12, test 2023 (full year).
+train_end: "2022-07-01"
+val_end: "2023-01-01"
 
 k: 12
 img_size: 224          # ViT input size
@@ -36,6 +36,10 @@ n_graph_nodes: 8
 sat_backbone: vit_base_patch16_224
 pretrained_backbone: true
 freeze_backbone: true   # ViT frozen as feature extractor: 87M->~1M trainable, kills overfit
+# Run B (partial fine-tune) variant — uncomment to unfreeze the last 2 ViT blocks
+# + final norm at a 10x smaller backbone LR; defaults above stay Run A (frozen):
+# unfreeze_last_blocks: 2
+# backbone_lr_scale: 0.1
 
 # --- GPU utilization (A100); CPU run ignores these and stays fp32 ---
 precision: auto        # -> bf16 on A100/Ampere, fp16 elsewhere, fp32 on CPU
